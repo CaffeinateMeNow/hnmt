@@ -208,6 +208,17 @@ class NMT(Model):
                 dropout=config['recurrent_dropout'],
                 trainable_initial=True,
                 offset=0))
+        for i in range(config['encoder_residual_layers']):
+            self.add(LSTMSequence(
+                'encoder_residual_{}'.format(i),
+                False,
+                config['encoder_state_dims'],
+                config['encoder_state_dims'],
+                layernorm=config['encoder_layernorm'],
+                dropout=config['recurrent_dropout'],
+                trainable_initial=True,
+                offset=0))
+
         self.add(LSTMSequence(
             'decoder', False,
             config['trg_embedding_dims'],
@@ -218,6 +229,16 @@ class NMT(Model):
             attended_dims=2*config['encoder_state_dims'],
             trainable_initial=False,
             offset=-1))
+        #for i in range(config['decoder_residual_layers']):
+        #    self.add(LSTMSequence(
+        #        'decoder_residual_{}'.format(i),
+        #        False,
+        #        config['decoder_state_dims'],
+        #        config['decoder_state_dims'],
+        #        layernorm=config['decoder_layernorm'],
+        #        dropout=config['recurrent_dropout'],
+        #        trainable_initial=True,
+        #        offset=0))
 
         h_t = T.matrix('h_t')
         self.predict_fun = function(
@@ -408,6 +429,13 @@ class NMT(Model):
         back_h_seq, back_c_seq = self.back_encoder(
                 T.concatenate([embedded_inputs, fwd_h_seq], axis=-1),
                 inputs_mask)
+        # Residual LSTM layers
+        for i in range(self.config['encoder_residual_layers']):
+            layer = getattr(self, 'encoder_residual_{}'.format(i))
+            resid_h_seq, resid_c_seq = layer(back_h_seq, inputs_mask)
+            # output is sum of input and predicted residual
+            back_h_seq += resid_h_seq
+            back_c_seq += resid_c_seq
         # Initial states for decoder
         h_0 = T.tanh(self.proj_h0(back_h_seq[0]))
         c_0 = T.tanh(self.proj_c0(back_c_seq[0]))
@@ -591,6 +619,9 @@ def main():
     parser.add_argument('--attention-dims', type=int, default=1024,
             metavar='N',
             help='size of attention vectors')
+    parser.add_argument('--encoder-residual-layers', type=int, default=0,
+            metavar='N',
+            help='number of residual layers in encoder')
     parser.add_argument('--alignment-loss', type=float, default=0.0,
             metavar='X',
             help='alignment cross-entropy contribution to loss function')
@@ -652,6 +683,8 @@ def main():
             config['beta'] = 0.2
         if 'len_smooth' not in config:
             config['len_smooth'] = 5.0
+        if 'encoder_residual_layers' not in config:
+            config['encoder_residual_layers'] = 0
         for c in configs[1:]:
             assert c['trg_encoder'].vocab == config['trg_encoder'].vocab
         if args.ensemble_average:
@@ -856,6 +889,7 @@ def main():
                 'encoder_state_dims': args.encoder_state_dims,
                 'decoder_state_dims': args.decoder_state_dims,
                 'attention_dims': args.attention_dims,
+                'encoder_residual_layers': args.encoder_residual_layers,
                 'layernorm': args.layer_normalization,
                 'alignment_loss': args.alignment_loss,
                 'alignment_decay': args.alignment_decay,
