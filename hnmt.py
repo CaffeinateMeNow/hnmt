@@ -622,6 +622,9 @@ def main():
     parser.add_argument('--encoder-residual-layers', type=int, default=0,
             metavar='N',
             help='number of residual layers in encoder')
+    parser.add_argument('--decoder-residual-layers', type=int, default=0,
+            metavar='N',
+            help='number of residual layers in decoder')
     parser.add_argument('--alignment-loss', type=float, default=0.0,
             metavar='X',
             help='alignment cross-entropy contribution to loss function')
@@ -685,6 +688,8 @@ def main():
             config['len_smooth'] = 5.0
         if 'encoder_residual_layers' not in config:
             config['encoder_residual_layers'] = 0
+        if 'decoder_residual_layers' not in config:
+            config['decoder_residual_layers'] = 0
         for c in configs[1:]:
             assert c['trg_encoder'].vocab == config['trg_encoder'].vocab
         if args.ensemble_average:
@@ -890,6 +895,7 @@ def main():
                 'decoder_state_dims': args.decoder_state_dims,
                 'attention_dims': args.attention_dims,
                 'encoder_residual_layers': args.encoder_residual_layers,
+                'decoder_residual_layers': args.decoder_residual_layers,
                 'layernorm': args.layer_normalization,
                 'alignment_loss': args.alignment_loss,
                 'alignment_decay': args.alignment_decay,
