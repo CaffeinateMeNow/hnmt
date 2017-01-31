@@ -169,4 +169,20 @@ class LSTMUnit(Unit):
 
 class ResidualUnit(Unit):
     """Wraps another Unit"""
-    pass
+    def __init__(self, wrapped, var=None):
+        self.wrapped = wrapped
+        var = var if var is not None else T.matrix('residual')
+        self.residual = Recurrence(var, None, dropout=0)
+
+    def step(self, out, unit_recs, unit_nonseqs):
+        unit_recs = self.wrapped.step(out, unit_recs, unit_nonseqs)
+        out += unit_recs[0]     # add residual
+        return [out] + unit_recs
+
+    @property
+    def recurrences(self):
+        return [self.residual] + self.wrapped.recurrences
+
+    @property
+    def non_sequences(self):
+        return self.wrapped.non_sequences
