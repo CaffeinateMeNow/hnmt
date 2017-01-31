@@ -73,32 +73,21 @@ class DeepSequence(Model):
         else:
             return seqs
 
-    def step(self, inputs, inputs_mask, recurrents_in, non_sequences=None):
-        if non_sequences is None:
-            non_sequences = []
-        recurrents_tail = list(recurrents_in)
+    def step(self, inputs, inputs_mask, *args):
+        args_tail = list(args)
+        recurrents_in = list(args) # FIXME: remove leading extra sequences
         recurrents_out = []
         out = inputs
         for unit in self.units:
             # group recurrents and non-sequences by unit
-            unit_rec, recurrents_tail = \
-                recurrents_tail[:unit.n_rec], recurrents_tail[unit.n_rec:]
+            unit_rec, args_tail = \
+                args_tail[:unit.n_rec], args_tail[unit.n_rec:]
             unit_nonseq, non_sequences = \
                 non_sequences[:unit.n_nonseq], non_sequences[unit.n_nonseq:]
             unit_recs_out = unit.step(out, unit_rec, unit_nonseq)
             # first recurrent output becomes new input
             out = unit_recs_out[0]
             recurrents_out.extend(unit_recs_out)
-        if len(recurrents_tail) != 0:
-            raise Exception(
-                '{} unused recurrent inits'.format(len(recurrents_tail))
-        if len(non_sequences) != 0:
-            raise Exception(
-                '{} unused non-sequences'.format(len(non_sequences))
-        if len(recurrents_out) != len(recurrents_in):
-            raise Exception(
-                '{} recurrent inits != {} recurrents out'.format(
-                    len(recurrents_out), len(recurrents_in)))
         # apply inputs mask to all recurrents
         inputs_mask_bcast = inputs_mask.dimshuffle(0, 'x')
         recurrents_out = [
