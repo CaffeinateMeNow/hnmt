@@ -17,6 +17,7 @@ from theano import tensor as T
 # FIXME: either merge this into bnas, fork bnas, or make hnmt a proper package
 from text import TextEncoder, Encoded
 from search import beam_with_coverage
+from deepsequence import *
 
 from bnas.model import Model, Linear, Embeddings, LSTMSequence
 from bnas.optimize import Adam, iterate_batches
@@ -208,16 +209,19 @@ class NMT(Model):
                 dropout=config['recurrent_dropout'],
                 trainable_initial=True,
                 offset=0))
-        for i in range(config['encoder_residual_layers']):
-            self.add(LSTMSequence(
-                'encoder_residual_{}'.format(i),
-                False,
-                config['encoder_state_dims'],
-                config['encoder_state_dims'],
-                layernorm=config['encoder_layernorm'],
-                dropout=config['recurrent_dropout'],
-                trainable_initial=True,
-                offset=0))
+        if config['encoder_residual_layers'] > 0:
+            units = [ResidualUnit(LSTMUnit(
+                        'encoder_residual_{}'.format(i),
+                        config['encoder_state_dims'],
+                        config['encoder_state_dims'],
+                        layernorm=config['encoder_layernorm'],
+                        dropout=config['recurrent_dropout'],
+                        trainable_initial=True))
+                    for i in range(config['encoder_residual_layers'])]
+            self.add(DeepSequence(
+                'encoder_residuals',
+                units,
+                backwards=False, offset=0))
 
         self.add(LSTMSequence(
             'decoder', False,
@@ -430,12 +434,8 @@ class NMT(Model):
                 T.concatenate([embedded_inputs, fwd_h_seq], axis=-1),
                 inputs_mask)
         # Residual LSTM layers
-        for i in range(self.config['encoder_residual_layers']):
-            layer = getattr(self, 'encoder_residual_{}'.format(i))
-            resid_h_seq, resid_c_seq = layer(back_h_seq, inputs_mask)
-            # output is sum of input and predicted residual
-            back_h_seq += resid_h_seq
-            back_c_seq += resid_c_seq
+        if self.config['encoder_residual_layers'] > 0:
+            back_h_seq = self.encoder_residuals(back_h_seq, inputs_mask)
         # Initial states for decoder
         h_0 = T.tanh(self.proj_h0(back_h_seq[0]))
         c_0 = T.tanh(self.proj_c0(back_c_seq[0]))

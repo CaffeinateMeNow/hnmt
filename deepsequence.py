@@ -14,27 +14,44 @@ from bnas.utils import expand_to_batch
 
 Recurrence = namedtuple('Recurrence',
     ['variable', 'init', 'dropout'])
+OutputOnly = object()
 
 class Unit(Model):
     """Base class for recurrent units"""
     def __init__(self, name):
         super().__init__(name)
         # recurrent inputs/outputs
-        self.recurrences = []
+        self._recurrences = []
         # non-sequence inputs
-        self.non_sequences = []
+        self._non_sequences = []
 
     def add_recurrence(self, var, init=None, dropout=0):
-        self.recurrences.append(Recurrence(var, init, dropout))
+        """params:
+            var -- Theano variable
+            init -- 1) None if nontrainable init will be passed as input
+                    2) parameter if a trainable init
+                 or 3) OutputOnly if no init is needed
+            dropout -- float in interval [0,1)
+        """
+        self._recurrences.append(Recurrence(var, init, dropout))
 
     def add_non_sequence(self, var):
-        self.non_sequences.append(var)
+        self._non_sequences.append(var)
 
     @property
-    def n_rec(self):
+    def recurrences(self):
+        return tuple(self._recurrences)
+
+    @property
+    def non_sequences(self):
+        return tuple(self._non_sequences)
+
+    def n_rec(self, no_outputs=False):
+        if no_outputs:
+            return sum(1 for rec in self.recurrences
+                       if rec.init != OutputOnly)
         return len(self.recurrences)
 
-    @property
     def n_nonseq(self):
         return len(self.non_sequences)
 
@@ -50,14 +67,19 @@ class DeepSequence(Model):
         self._step_fun = None
 
     def __call__(self, inputs, inputs_mask,
-                 nontrainable_recurrent_inits, non_sequences=None):
+                 nontrainable_recurrent_inits=None, non_sequences=None,
+                 return_intermediary=True):
         # combine trainable and nontrainable inits
         all_inits = []
         batch_size = inputs.shape[1]
         for rec in self.recurrences:
+            print(rec)
             if rec.init is None:
                 # nontrainable init is passed in as argument
                 all_inits.append(nontrainable_recurrent_inits.pop(0))
+            elif rec.init == OutputOnly:
+                # no init needed
+                all_inits.append(None)
             else:
                 # trainable inits must be expanded to batch size
                 all_inits.append(
@@ -66,10 +88,14 @@ class DeepSequence(Model):
         seqs_in = [{'input': inputs, 'taps': [self.offset]},
                    {'input': inputs_mask, 'taps': [self.offset]}]
         # FIXME: add extra sequences, if needed
-        non_sequences = self.non_sequences
+        non_sequences = non_sequences if non_sequences is not None \
+            else []
         for unit in self.units:
             non_sequences.extend(unit.parameters_list())
             # FIXME: add dropout masks to nonseqs. Interleaved?
+        print('seqs_in', seqs_in)
+        print('all_inits', all_inits)
+        print('non_sequences', non_sequences)
         seqs, _ = theano.scan(
                 fn=self.step,
                 go_backwards=self.backwards,
@@ -77,12 +103,15 @@ class DeepSequence(Model):
                 outputs_info=all_inits,
                 non_sequences=non_sequences)
         if self.backwards:
-            return tuple(seq[::-1] for seq in seqs)
-        else:
+            seqs = tuple(seq[::-1] for seq in seqs)
+        if return_intermediary:
             return seqs
+        else:
+            return seqs[self.final_out_idx]
 
     def step(self, inputs, inputs_mask, *args):
         args_tail = list(args)
+        print('args_tail', args_tail)
         grouped_rec = []
         grouped_nonseq = []
         recurrents_out = []
@@ -90,14 +119,23 @@ class DeepSequence(Model):
         # group recurrents and non-sequences by unit
         # FIXME: separate leading extra sequences
         for unit in self.units:
-            unit_rec, args_tail = \
-                args_tail[:unit.n_rec], args_tail[unit.n_rec:]
+            print('unit with n_rec', unit.n_rec(no_outputs=True))
+            if len(args_tail) < unit.n_rec(no_outputs=True):
+                raise Exception('Too few arguments to step. '
+                    'Unit {} expects {} non-None inits, got {}'.format(
+                    unit, unit.n_rec(no_outputs=True), len(args_tail)))
+            unit_rec, args_tail = (
+                args_tail[:unit.n_rec(no_outputs=True)], 
+                args_tail[unit.n_rec(no_outputs=True):])
             grouped_rec.append(unit_rec)
         for unit in self.units:
             unit_nonseq, args_tail = \
-                args_tail[:unit.n_nonseq], args_tail[unit.n_nonseq:]
+                args_tail[:unit.n_nonseq()], args_tail[unit.n_nonseq():]
             grouped_nonseq.append(unit_rec)
+        # FIXME: recurrents_in is missing the Nones (scan eats them up!)
         recurrents_in = [rec for unit_rec in grouped_rec for rec in unit_rec]
+        print('grouped_rec', grouped_rec)
+        print('recurrents_in', recurrents_in)
         # apply the units
         for (unit, unit_rec, unit_nonseq)  in zip(
                 self.units, grouped_rec, grouped_nonseq):
@@ -107,10 +145,12 @@ class DeepSequence(Model):
             recurrents_out.extend(unit_recs_out)
         # apply inputs mask to all recurrents
         inputs_mask_bcast = inputs_mask.dimshuffle(0, 'x')
+        print('before masking: recurrents_out', recurrents_out, 'recurrents_in', recurrents_in)
         recurrents_out = [
             T.switch(inputs_mask_bcast, rec_out, rec_in)
             for (rec_out, rec_in) in zip(recurrents_out, recurrents_in)]
-        # use recurrents_out[this.final_out_idx]
+        # you probably only care about recurrents_out[this.final_out_idx]
+        print('recurrents_out', recurrents_out)
         return recurrents_out
 
     def step_fun(self):
@@ -127,7 +167,7 @@ class DeepSequence(Model):
 
     @property
     def final_out_idx(self):
-        return -self.units[-1].n_rec
+        return -self.units[-1].n_rec()
 
     @property
     def recurrences(self):
@@ -157,12 +197,14 @@ class LSTMUnit(Unit):
         self.add_recurrence(T.matrix('c_tm1'), init=c_0, dropout=0)
         if self.gate.use_attention:
             # attention output
-            self.add_recurrence(None, init=None, dropout=0)
+            self.add_recurrence(
+                T.matrix('attention'), init=OutputOnly, dropout=0)
             self.add_non_sequence(T.tensor3('attended'))
             self.add_non_sequence(T.tensor3('attended_dot_u'))
             self.add_non_sequence(T.matrix('attention_mask'))
 
     def step(self, out, unit_recs, unit_nonseqs):
+        print('in LSTMUnit step', out, unit_recs, unit_nonseqs)
         unit_recs = self.gate(out, *(unit_recs + unit_nonseqs))
         return unit_recs
 
@@ -170,18 +212,20 @@ class LSTMUnit(Unit):
 class ResidualUnit(Unit):
     """Wraps another Unit"""
     def __init__(self, wrapped, var=None):
+        super().__init__('residual_of_{}'.format(wrapped.name))
         self.wrapped = wrapped
         var = var if var is not None else T.matrix('residual')
-        self.residual = Recurrence(var, None, dropout=0)
+        self.residual = Recurrence(var, OutputOnly, dropout=0)
 
     def step(self, out, unit_recs, unit_nonseqs):
         unit_recs = self.wrapped.step(out, unit_recs, unit_nonseqs)
         out += unit_recs[0]     # add residual
-        return [out] + unit_recs
+        print('in ResidualUnit step, returning ', (out,) + unit_recs)
+        return (out,) + unit_recs
 
     @property
     def recurrences(self):
-        return [self.residual] + self.wrapped.recurrences
+        return (self.residual,) + self.wrapped.recurrences
 
     @property
     def non_sequences(self):
