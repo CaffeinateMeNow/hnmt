@@ -4,7 +4,13 @@ Can be both teacher-forced with scan, and single-stepped in beam search.
 """
 
 from collections import namedtuple
-from bnas.model import Model
+import theano
+from theano import tensor as T
+
+from bnas import init
+from bnas.model import Model, LSTM
+from bnas.fun import function
+from bnas.utils import expand_to_batch
 
 Recurrence = namedtuple('Recurrence',
     ['variable', 'init', 'dropout'])
@@ -18,8 +24,11 @@ class Unit(Model):
         # non-sequence inputs
         self.non_sequences = []
 
-    def add_recurrence(self, var, init=None, dropout=False):
+    def add_recurrence(self, var, init=None, dropout=0):
         self.recurrences.append(Recurrence(var, init, dropout))
+
+    def add_non_sequence(self, var):
+        self.non_sequences.append(var)
 
     @property
     def n_rec(self):
@@ -29,7 +38,7 @@ class Unit(Model):
     def n_nonseq(self):
         return len(self.non_sequences)
 
-    # subclasses should define step
+    # subclasses should define step(out, unit_recs, unit_nonseqs) -> unit_recs
 
 class DeepSequence(Model):
     """Recurrent sequence with one or more units"""
@@ -66,8 +75,7 @@ class DeepSequence(Model):
                 go_backwards=self.backwards,
                 sequences=seqs_in,
                 outputs_info=all_inits,
-                non_sequences=dropout_masks + attention_info + \
-                              self.gate.parameters_list())
+                non_sequences=non_sequences)
         if self.backwards:
             return tuple(seq[::-1] for seq in seqs)
         else:
@@ -75,15 +83,24 @@ class DeepSequence(Model):
 
     def step(self, inputs, inputs_mask, *args):
         args_tail = list(args)
-        recurrents_in = list(args) # FIXME: remove leading extra sequences
+        grouped_rec = []
+        grouped_nonseq = []
         recurrents_out = []
         out = inputs
+        # group recurrents and non-sequences by unit
+        # FIXME: separate leading extra sequences
         for unit in self.units:
-            # group recurrents and non-sequences by unit
             unit_rec, args_tail = \
                 args_tail[:unit.n_rec], args_tail[unit.n_rec:]
-            unit_nonseq, non_sequences = \
-                non_sequences[:unit.n_nonseq], non_sequences[unit.n_nonseq:]
+            grouped_rec.append(unit_rec)
+        for unit in self.units:
+            unit_nonseq, args_tail = \
+                args_tail[:unit.n_nonseq], args_tail[unit.n_nonseq:]
+            grouped_nonseq.append(unit_rec)
+        recurrents_in = [rec for unit_rec in grouped_rec for rec in unit_rec]
+        # apply the units
+        for (unit, unit_rec, unit_nonseq)  in zip(
+                self.units, grouped_rec, grouped_nonseq):
             unit_recs_out = unit.step(out, unit_rec, unit_nonseq)
             # first recurrent output becomes new input
             out = unit_recs_out[0]
@@ -104,7 +121,7 @@ class DeepSequence(Model):
                     rec.var for rec in unit.recurrences))
             self._step_fun = function(
                 all_inputs,
-                self.step(*all_inputs)
+                self.step(*all_inputs),
                 name='{}_step_fun'.format(self.name))
         return self._step_fun
 
@@ -122,8 +139,34 @@ class DeepSequence(Model):
 
 
 class LSTMUnit(Unit):
-    pass
+    def __init__(self, name, *args,
+                 dropout=0, trainable_initial=False, **kwargs):
+        super().__init__(name)
+        self.add(LSTM('gate', *args, **kwargs))
+        if trainable_initial:
+            self.param('h_0', (self.gate.state_dims,),
+                       init_f=init.Gaussian(fan_in=self.gate.state_dims))
+            self.param('c_0', (self.gate.state_dims,),
+                       init_f=init.Gaussian(fan_in=self.gate.state_dims))
+            h_0 = self._h_0
+            c_0 = self._c_0
+        else:
+            h_0 = None
+            c_0 = None
+        self.add_recurrence(T.matrix('h_tm1'), init=h_0, dropout=dropout)
+        self.add_recurrence(T.matrix('c_tm1'), init=c_0, dropout=0)
+        if self.gate.use_attention:
+            # attention output
+            self.add_recurrence(None, init=None, dropout=0)
+            self.add_non_sequence(T.tensor3('attended'))
+            self.add_non_sequence(T.tensor3('attended_dot_u'))
+            self.add_non_sequence(T.matrix('attention_mask'))
+
+    def step(self, out, unit_recs, unit_nonseqs):
+        unit_recs = self.gate(out, *(unit_recs + unit_nonseqs))
+        return unit_recs
+
 
 class ResidualUnit(Unit):
-    """Wraps another unit"""
+    """Wraps another Unit"""
     pass
