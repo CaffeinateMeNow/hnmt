@@ -435,7 +435,8 @@ class NMT(Model):
                 inputs_mask)
         # Residual LSTM layers
         if self.config['encoder_residual_layers'] > 0:
-            back_h_seq = self.encoder_residuals(back_h_seq, inputs_mask)
+            back_h_seq = self.encoder_residuals(
+                back_h_seq, inputs_mask, return_intermediary=False)
         # Initial states for decoder
         h_0 = T.tanh(self.proj_h0(back_h_seq[0]))
         c_0 = T.tanh(self.proj_c0(back_c_seq[0]))
