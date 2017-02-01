@@ -327,33 +327,40 @@ class NMT(Model):
         # list of models in the ensemble
         models = [self] + others
         n_models = len(models)
-        n_states = 2
 
-        # tuple (h_0, c_0, attended) for each model in the ensemble
-        models_init = [m.encode_fun(inputs, inputs_mask, chars, chars_mask)
-                       for m in models]
-
-        # precomputed sequences for attention, one for each model
-        models_attended_dot_u = [
-                m.decoder.attention_u_fun()(attended)
-                for m, (_,_,attended) in zip(models, models_init)]
+        # OBS: this assumes that inits for residual layers are trainable
+        models_init = []
+        models_attended = []
+        non_sequences = []
+        for m in models:
+            h_0, c_0, attended = m.encode_fun(
+                inputs, inputs_mask, chars, chars_mask)
+            models_init.append((h_0, c_0))
+            models_attended.append(attended)
+            non_sequences.append(m.make_nonsequences(
+                [attended, inputs_mask]))
 
         # output embeddings for each model
         models_embeddings = [
                 m.trg_embeddings._w.get_value(borrow=False)
                 for m in models]
 
-
+        # FIXME: need to remove OutputOnly from states
+        # FIXME: keep states grouped by model?
         def step(i, states, outputs, outputs_mask, sent_indices):
-            models_result = [
-                    models[idx].decoder.step_fun()(
-                        models_embeddings[idx][outputs[-1]],
-                        states[idx*n_states+0],
-                        states[idx*n_states+1],
-                        models_init[idx][2][:,sent_indices,...],
-                        models_attended_dot_u[idx][:,sent_indices,...],
-                        inputs_mask[:,sent_indices])
-                    for idx in range(n_models)]
+            models_result = []
+            for (idx, model) in enumerate(models):
+                args = [models_embeddings[idx][outputs[-1]],
+                        outputs_mask]
+                # add stored recurrent inputs
+                args.extend(states[idx])
+                # relevant non-sequences need to be selected by sentence
+                for non_seq in non_sequences[idx]:
+                    args.append(non_seq[:,sent_indices,...])
+                models_result.append(
+                    model.decoder.step_fun()(*args))
+            # OBS: this assumes that attention is in first layer
+            # otherwise attention output will not be at index 2
             mean_attention = np.array(
                     [models_result[idx][2] for idx in range(n_models)]
                  ).mean(axis=0)
@@ -361,7 +368,7 @@ class NMT(Model):
                     [models[idx].predict_fun(models_result[idx][0])
                      for idx in range(n_models)])
             dist = models_predict.mean(axis=0)
-            return ([x for result in models_result for x in result[:2]],
+            return ([x for result in models_result for x in result],
                     dist, mean_attention)
 
         return beam_with_coverage(
@@ -376,21 +383,6 @@ class NMT(Model):
                 alpha=alpha,
                 beta=beta,
                 len_smooth=len_smooth)
-
-    #def search_single(self, inputs, inputs_mask, chars, chars_mask, max_length,
-    #           beam_size=8):
-    #    h_0, c_0, attended = self.encode_fun(
-    #            inputs, inputs_mask, chars, chars_mask)
-    #    return self.decoder.search(
-    #            self.predict_fun,
-    #            self.trg_embeddings._w.get_value(borrow=True),
-    #            self.config['trg_encoder']['<S>'],
-    #            self.config['trg_encoder']['</S>'],
-    #            max_length,
-    #            h_0=h_0, c_0=c_0,
-    #            attended=attended,
-    #            attention_mask=inputs_mask,
-    #            beam_size=beam_size)
 
     def encode(self, inputs, inputs_mask, chars, chars_mask):
         # First run a bidirectional LSTM encoder over the unknown word

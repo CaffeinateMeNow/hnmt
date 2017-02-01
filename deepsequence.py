@@ -98,6 +98,21 @@ class DeepSequence(Model):
         seqs_in = [{'input': inputs, 'taps': [self.offset]},
                    {'input': inputs_mask, 'taps': [self.offset]}]
         # FIXME: add extra sequences, if needed
+        non_sequences_in = self.make_nonsequences(non_sequences)
+        seqs, _ = theano.scan(
+                fn=self.step,
+                go_backwards=self.backwards,
+                sequences=seqs_in,
+                outputs_info=inits_in,
+                non_sequences=non_sequences_in)
+        if self.backwards:
+            seqs = tuple(seq[::-1] for seq in seqs)
+        if return_intermediary:
+            return seqs
+        else:
+            return seqs[self.final_out_idx]
+
+    def make_nonsequences(self, non_sequences):
         non_sequences_in = []
         if non_sequences is None:
             non_sequences = []
@@ -112,18 +127,7 @@ class DeepSequence(Model):
         for unit in self.units:
             non_sequences_in.extend(unit.parameters_list())
             # FIXME: add dropout masks to nonseqs. Interleaved?
-        seqs, _ = theano.scan(
-                fn=self.step,
-                go_backwards=self.backwards,
-                sequences=seqs_in,
-                outputs_info=inits_in,
-                non_sequences=non_sequences_in)
-        if self.backwards:
-            seqs = tuple(seq[::-1] for seq in seqs)
-        if return_intermediary:
-            return seqs
-        else:
-            return seqs[self.final_out_idx]
+        return non_sequences_in
 
     def step(self, inputs, inputs_mask, *args):
         args_tail = list(args)
