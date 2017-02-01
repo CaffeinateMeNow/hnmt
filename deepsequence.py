@@ -14,6 +14,8 @@ from bnas.utils import expand_to_batch
 
 Recurrence = namedtuple('Recurrence',
     ['variable', 'init', 'dropout'])
+NonSequence = namedtuple('NonSequence',
+    ['variable', 'func', 'idx'])
 OutputOnly = object()
 
 class Unit(Model):
@@ -35,8 +37,18 @@ class Unit(Model):
         """
         self._recurrences.append(Recurrence(var, init, dropout))
 
-    def add_non_sequence(self, var):
-        self._non_sequences.append(var)
+    def add_non_sequence(self, var, func=None, idx=None):
+        """params:
+            var -- Theano variable
+            func -- 1) None if passed in as input
+                 or 2) function(var) -> var
+                       if precomputed from another input
+            idx -- index of input non-sequences to give
+                   as argument to func
+        """
+        if func is not None:
+            assert idx is not None
+        self._non_sequences.append(NonSequence(var, func, idx))
 
     @property
     def recurrences(self):
@@ -69,34 +81,43 @@ class DeepSequence(Model):
                  nontrainable_recurrent_inits=None, non_sequences=None,
                  return_intermediary=True):
         # combine trainable and nontrainable inits
-        all_inits = []
+        inits_in = []
         batch_size = inputs.shape[1]
         for rec in self.recurrences:
             if rec.init is None:
                 # nontrainable init is passed in as argument
-                all_inits.append(nontrainable_recurrent_inits.pop(0))
+                inits_in.append(nontrainable_recurrent_inits.pop(0))
             elif rec.init == OutputOnly:
                 # no init needed
-                all_inits.append(None)
+                inits_in.append(None)
             else:
                 # trainable inits must be expanded to batch size
-                all_inits.append(
+                inits_in.append(
                     expand_to_batch(rec.init, batch_size))
             # FIXME: make dropout masks here
         seqs_in = [{'input': inputs, 'taps': [self.offset]},
                    {'input': inputs_mask, 'taps': [self.offset]}]
         # FIXME: add extra sequences, if needed
-        non_sequences = non_sequences if non_sequences is not None \
-            else []
+        non_sequences_in = []
+        if non_sequences is None:
+            non_sequences = []
         for unit in self.units:
-            non_sequences.extend(unit.parameters_list())
+            # previous units already popped off
+            unit_nonseq = list(non_sequences)
+            for ns in unit.non_sequences:
+                if ns.func is not None:
+                    non_sequences_in.append(ns.func(unit_nonseq[ns.idx]))
+                else:
+                    non_sequences_in.append(non_sequences.pop(0))
+        for unit in self.units:
+            non_sequences_in.extend(unit.parameters_list())
             # FIXME: add dropout masks to nonseqs. Interleaved?
         seqs, _ = theano.scan(
                 fn=self.step,
                 go_backwards=self.backwards,
                 sequences=seqs_in,
-                outputs_info=all_inits,
-                non_sequences=non_sequences)
+                outputs_info=inits_in,
+                non_sequences=non_sequences_in)
         if self.backwards:
             seqs = tuple(seq[::-1] for seq in seqs)
         if return_intermediary:
@@ -127,7 +148,7 @@ class DeepSequence(Model):
         for unit in self.units:
             unit_nonseq, args_tail = \
                 args_tail[:unit.n_nonseq], args_tail[unit.n_nonseq:]
-            grouped_nonseq.append(unit_rec)
+            grouped_nonseq.append(unit_nonseq)
         # apply the units
         for (unit, unit_rec, unit_nonseq)  in zip(
                 self.units, grouped_rec, grouped_nonseq):
@@ -190,8 +211,11 @@ class LSTMUnit(Unit):
             # attention output
             self.add_recurrence(
                 T.matrix('attention'), init=OutputOnly, dropout=0)
+
             self.add_non_sequence(T.tensor3('attended'))
-            self.add_non_sequence(T.tensor3('attended_dot_u'))
+            # precomputed from attended
+            self.add_non_sequence(T.tensor3('attended_dot_u'),
+                func=self.gate.attention_u, idx=0)
             self.add_non_sequence(T.matrix('attention_mask'))
 
     def step(self, out, unit_recs, unit_nonseqs):

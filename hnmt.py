@@ -210,7 +210,7 @@ class NMT(Model):
                 trainable_initial=True,
                 offset=0))
         if config['encoder_residual_layers'] > 0:
-            units = [ResidualUnit(LSTMUnit(
+            encoder_units = [ResidualUnit(LSTMUnit(
                         'encoder_residual_{}'.format(i),
                         config['encoder_state_dims'],
                         config['encoder_state_dims'],
@@ -220,19 +220,22 @@ class NMT(Model):
                     for i in range(config['encoder_residual_layers'])]
             self.add(DeepSequence(
                 'encoder_residuals',
-                units,
+                encoder_units,
                 backwards=False, offset=0))
 
-        self.add(LSTMSequence(
-            'decoder', False,
+        decoder_units = [LSTMUnit(
+            'decoder_attention',
             config['trg_embedding_dims'],
             config['decoder_state_dims'],
             layernorm=config['decoder_layernorm'],
             dropout=config['recurrent_dropout'],
             attention_dims=config['attention_dims'],
             attended_dims=2*config['encoder_state_dims'],
-            trainable_initial=False,
-            offset=-1))
+            trainable_initial=False)]
+        self.add(DeepSequence(
+            'decoder',
+            decoder_units,
+            backwards=False, offset=-1))
         #for i in range(config['decoder_residual_layers']):
         #    self.add(LSTMSequence(
         #        'decoder_residual_{}'.format(i),
@@ -450,8 +453,9 @@ class NMT(Model):
         h_0, c_0, attended = self.encode(
                 inputs, inputs_mask, chars, chars_mask)
         h_seq, c_seq, attention_seq = self.decoder(
-                embedded_outputs, outputs_mask, h_0=h_0, c_0=c_0,
-                attended=attended, attention_mask=inputs_mask)
+                embedded_outputs, outputs_mask,
+                [h_0, c_0],
+                [attended, inputs_mask])
         pred_seq = softmax_3d(self.emission(T.tanh(self.hidden(h_seq))))
 
         return pred_seq, attention_seq
