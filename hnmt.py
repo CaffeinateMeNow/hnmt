@@ -357,9 +357,7 @@ class NMT(Model):
                 args.extend(states[idx])
                 # relevant non-sequences need to be selected by sentence
                 for non_seq in non_sequences[idx]:
-                    print('slicing sentences from non_seq', non_seq)
                     args.append(non_seq[:,sent_indices,...])
-                print('all args: ', args)
                 final_out, states, outputs = model.decoder.group_outputs(
                     model.decoder.step_fun()(*args))
                 models_out.append(final_out)

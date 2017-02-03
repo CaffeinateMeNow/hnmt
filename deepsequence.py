@@ -187,8 +187,6 @@ class DeepSequence(Model):
             unit_nonseq, args_tail = \
                 args_tail[:unit.n_nonseq], args_tail[unit.n_nonseq:]
             grouped_nonseq.append(unit_nonseq)
-            print(unit, unit.n_nonseq, unit_nonseq)
-            print('grouped_nonseq now', grouped_nonseq)
         # apply the units
         for (unit, unit_rec, unit_nonseq)  in zip(
                 self.units, grouped_rec, grouped_nonseq):
@@ -261,7 +259,6 @@ class LSTMUnit(Unit):
             self.add_non_sequence(T.matrix('attention_mask'))
 
     def step(self, out, unit_recs, unit_nonseqs):
-        print(self, out, unit_recs, unit_nonseqs)
         unit_recs = self.gate(out, *(unit_recs + unit_nonseqs))
         return unit_recs
 
