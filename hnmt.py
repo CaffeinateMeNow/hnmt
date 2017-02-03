@@ -345,10 +345,11 @@ class NMT(Model):
                 m.trg_embeddings._w.get_value(borrow=False)
                 for m in models]
 
-        # FIXME: need to remove OutputOnly from states
         # FIXME: keep states grouped by model?
         def step(i, states, outputs, outputs_mask, sent_indices):
-            models_result = []
+            models_out = []
+            models_states = []
+            models_att = []
             for (idx, model) in enumerate(models):
                 args = [models_embeddings[idx][outputs[-1]],
                         outputs_mask]
@@ -357,19 +358,20 @@ class NMT(Model):
                 # relevant non-sequences need to be selected by sentence
                 for non_seq in non_sequences[idx]:
                     args.append(non_seq[:,sent_indices,...])
-                models_result.append(
+                final_out, states, outputs = model.decoder.group_outputs(
                     model.decoder.step_fun()(*args))
-            # OBS: this assumes that attention is in first layer
-            # otherwise attention output will not be at index 2
+                models_out.append(final_out)
+                models_states.append(states)
+                models_att.append(outputs[0])
+
             mean_attention = np.array(
-                    [models_result[idx][2] for idx in range(n_models)]
+                    [models_att[idx] for idx in range(n_models)]
                  ).mean(axis=0)
             models_predict = np.array(
-                    [models[idx].predict_fun(models_result[idx][0])
+                    [models[idx].predict_fun(models_out[idx])
                      for idx in range(n_models)])
             dist = models_predict.mean(axis=0)
-            return ([x for result in models_result for x in result],
-                    dist, mean_attention)
+            return (models_states, dist, mean_attention)
 
         return beam_with_coverage(
                 step,
@@ -430,8 +432,7 @@ class NMT(Model):
                 inputs_mask)
         # Residual LSTM layers
         if self.config['encoder_residual_layers'] > 0:
-            back_h_seq = self.encoder_residuals(
-                back_h_seq, inputs_mask, return_intermediary=False)
+            back_h_seq, _, _ = self.encoder_residuals(back_h_seq, inputs_mask)
         # Initial states for decoder
         h_0 = T.tanh(self.proj_h0(back_h_seq[0]))
         c_0 = T.tanh(self.proj_c0(back_c_seq[0]))

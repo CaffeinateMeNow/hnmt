@@ -78,8 +78,7 @@ class DeepSequence(Model):
         self._step_fun = None
 
     def __call__(self, inputs, inputs_mask,
-                 nontrainable_recurrent_inits=None, non_sequences=None,
-                 return_intermediary=True):
+                 nontrainable_recurrent_inits=None, non_sequences=None):
         # combine trainable and nontrainable inits
         inits_in = []
         batch_size = inputs.shape[1]
@@ -107,10 +106,19 @@ class DeepSequence(Model):
                 non_sequences=non_sequences_in)
         if self.backwards:
             seqs = tuple(seq[::-1] for seq in seqs)
-        if return_intermediary:
-            return seqs
-        else:
-            return seqs[self.final_out_idx]
+        ## group outputs in a useful way
+        # main output of final unit
+        final_out = seqs[self.final_out_idx]
+        # true recurrent states (inputs for next iteration)
+        states = []
+        # OutputOnly are not fed into next iteration
+        outputs = []
+        for (rec, seq) in zip(self.recurrences, seqs):
+            if rec.init == OutputOnly:
+                outputs.append(seq)
+            else:
+                states.append(seq)
+        return final_out, states, outputs
 
     def make_nonsequences(self, non_sequences):
         non_sequences_in = []
