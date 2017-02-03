@@ -56,7 +56,7 @@ def beam_with_coverage(
     """
 
     beams = [Hypothesis(i, 0., -1e30, (), start_symbol,
-                        [s[i, :] for s in states0],
+                        [[s[i, :] for s in ms] for ms in states0],
                         1e-30)
              for i in range(batch_size)]
 
@@ -75,7 +75,9 @@ def beam_with_coverage(
             states.append(hyp.states)
             prev_syms[0, j] = hyp.last_sym
             sent_indices[j] = hyp.sentence
-        states = [np.array(x) for x in zip(*states)]
+        # for each state of each model, concatenate hypotheses
+        states = [[np.array(x) for x in zip(*y)]
+                  for y in zip(*states)]
 
         # predict
         all_states, all_dists, attention = step(
@@ -123,7 +125,7 @@ def beam_with_coverage(
                                norm_score,
                                history,
                                symbol,
-                               [s[j, :] for s in all_states],
+                               [[s[j, :] for s in ms] for ms in all_states],
                                coverage))
 
         # prune hypotheses

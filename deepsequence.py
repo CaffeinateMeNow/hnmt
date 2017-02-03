@@ -76,6 +76,7 @@ class DeepSequence(Model):
         self.backwards = backwards
         self.offset = offset
         self._step_fun = None
+        self._ns_func_cache = {}
 
     def __call__(self, inputs, inputs_mask,
                  nontrainable_recurrent_inits=None, non_sequences=None):
@@ -106,7 +107,11 @@ class DeepSequence(Model):
                 non_sequences=non_sequences_in)
         if self.backwards:
             seqs = tuple(seq[::-1] for seq in seqs)
-        ## group outputs in a useful way
+        # returns: final_out, states, outputs
+        return self.group_outputs(seqs)
+
+    def group_outputs(self, seqs):
+        """group outputs in a useful way"""
         # main output of final unit
         final_out = seqs[self.final_out_idx]
         # true recurrent states (inputs for next iteration)
@@ -120,7 +125,8 @@ class DeepSequence(Model):
                 states.append(seq)
         return final_out, states, outputs
 
-    def make_nonsequences(self, non_sequences):
+    def make_nonsequences(self, non_sequences,
+                          include_params=True, do_eval=False):
         non_sequences_in = []
         if non_sequences is None:
             non_sequences = []
@@ -129,12 +135,30 @@ class DeepSequence(Model):
             unit_nonseq = list(non_sequences)
             for ns in unit.non_sequences:
                 if ns.func is not None:
-                    non_sequences_in.append(ns.func(unit_nonseq[ns.idx]))
+                    if do_eval:
+                        func = self.ns_func(ns)
+                        val = func(unit_nonseq[ns.idx])
+                    else:
+                        val = ns.func(unit_nonseq[ns.idx])
+                    non_sequences_in.append(val)
                 else:
                     non_sequences_in.append(non_sequences.pop(0))
+            # FIXME: add dropout masks to nonseqs. Interleaved?
+        if include_params:
+            non_sequences_in.extend(self.unit_parameters_list())
+        return non_sequences_in
+
+    def ns_func(self, ns):
+        if ns not in self._ns_func_cache:
+            self._ns_func_cache[ns] = function(
+                [ns.variable],
+                ns.func(ns.variable))
+        return self._ns_func_cache[ns]
+
+    def unit_parameters_list(self):
+        non_sequences_in = []
         for unit in self.units:
             non_sequences_in.extend(unit.parameters_list())
-            # FIXME: add dropout masks to nonseqs. Interleaved?
         return non_sequences_in
 
     def step(self, inputs, inputs_mask, *args):
@@ -158,9 +182,13 @@ class DeepSequence(Model):
                     recurrents_in.append(rec_in)
             grouped_rec.append(unit_rec)
         for unit in self.units:
+            if len(args_tail) < unit.n_nonseq:
+                raise Exception('Not enough nonsequences')
             unit_nonseq, args_tail = \
                 args_tail[:unit.n_nonseq], args_tail[unit.n_nonseq:]
             grouped_nonseq.append(unit_nonseq)
+            print(unit, unit.n_nonseq, unit_nonseq)
+            print('grouped_nonseq now', grouped_nonseq)
         # apply the units
         for (unit, unit_rec, unit_nonseq)  in zip(
                 self.units, grouped_rec, grouped_nonseq):
@@ -179,10 +207,12 @@ class DeepSequence(Model):
 
     def step_fun(self):
         if self._step_fun is None:
-            all_inputs = [T.matrix('inputs')]
-            for unit in self.units:
-                all_inputs.extend((
-                    rec.var for rec in unit.recurrences))
+            all_inputs = [T.matrix('inputs'), T.vector('inputs_mask')]
+            all_inputs.extend((
+                rec.variable for rec in self.recurrences
+                if not rec.init == OutputOnly))
+            all_inputs.extend((
+                nonseq.variable for nonseq in self.non_sequences))
             self._step_fun = function(
                 all_inputs,
                 self.step(*all_inputs),
@@ -231,6 +261,7 @@ class LSTMUnit(Unit):
             self.add_non_sequence(T.matrix('attention_mask'))
 
     def step(self, out, unit_recs, unit_nonseqs):
+        print(self, out, unit_recs, unit_nonseqs)
         unit_recs = self.gate(out, *(unit_recs + unit_nonseqs))
         return unit_recs
 

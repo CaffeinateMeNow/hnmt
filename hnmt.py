@@ -337,15 +337,15 @@ class NMT(Model):
                 inputs, inputs_mask, chars, chars_mask)
             models_init.append((h_0, c_0))
             models_attended.append(attended)
-            non_sequences.append(m.make_nonsequences(
-                [attended, inputs_mask]))
+            non_sequences.append(m.decoder.make_nonsequences(
+                [attended, inputs_mask],
+                include_params=False, do_eval=True))
 
         # output embeddings for each model
         models_embeddings = [
                 m.trg_embeddings._w.get_value(borrow=False)
                 for m in models]
 
-        # FIXME: keep states grouped by model?
         def step(i, states, outputs, outputs_mask, sent_indices):
             models_out = []
             models_states = []
@@ -357,7 +357,9 @@ class NMT(Model):
                 args.extend(states[idx])
                 # relevant non-sequences need to be selected by sentence
                 for non_seq in non_sequences[idx]:
+                    print('slicing sentences from non_seq', non_seq)
                     args.append(non_seq[:,sent_indices,...])
+                print('all args: ', args)
                 final_out, states, outputs = model.decoder.group_outputs(
                     model.decoder.step_fun()(*args))
                 models_out.append(final_out)
@@ -375,7 +377,7 @@ class NMT(Model):
 
         return beam_with_coverage(
                 step,
-                [x for h_0, c_0, _ in models_init for x in [h_0, c_0]],
+                models_init,
                 models_init[0][0].shape[0],
                 self.config['trg_encoder']['<S>'],
                 self.config['trg_encoder']['</S>'],
@@ -445,10 +447,12 @@ class NMT(Model):
         embedded_outputs = self.trg_embeddings(outputs)
         h_0, c_0, attended = self.encode(
                 inputs, inputs_mask, chars, chars_mask)
-        h_seq, c_seq, attention_seq = self.decoder(
+        h_seq, states, outputs = self.decoder(
                 embedded_outputs, outputs_mask,
                 [h_0, c_0],
                 [attended, inputs_mask])
+        c_seq = states[self.decoder.final_out_idx + 1]
+        attention_seq = outputs[0]
         pred_seq = softmax_3d(self.emission(T.tanh(self.hidden(h_seq))))
 
         return pred_seq, attention_seq
