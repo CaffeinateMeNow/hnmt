@@ -452,6 +452,10 @@ class NMT(Model):
         c_seq = states[self.decoder.final_out_idx + 1]
         attention_seq = outputs[0]
         pred_seq = softmax_3d(self.emission(T.tanh(self.hidden(h_seq))))
+        theano.printing.pydotprint(
+            [pred_seq, attention_seq],
+            outfile='deepstack.png',
+            scan_graphs=True)
 
         return pred_seq, attention_seq
 
