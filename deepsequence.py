@@ -73,6 +73,8 @@ class DeepSequence(Model):
     def __init__(self, name, units, backwards=False, offset=0):
         super().__init__(name)
         self.units = units if units is not None else []
+        for unit in self.units:
+            self.add(unit)
         self.backwards = backwards
         self.offset = offset
         self._step_fun = None
@@ -86,7 +88,11 @@ class DeepSequence(Model):
         for rec in self.recurrences:
             if rec.init is None:
                 # nontrainable init is passed in as argument
-                inits_in.append(nontrainable_recurrent_inits.pop(0))
+                try:
+                    inits_in.append(nontrainable_recurrent_inits.pop(0))
+                except IndexError:
+                    raise Exception('Too few nontrainable_recurrent_inits. '
+                        ' Init for {} onwards missing'.format(rec))
             elif rec.init == OutputOnly:
                 # no init needed
                 inits_in.append(None)
@@ -232,9 +238,10 @@ class DeepSequence(Model):
 
 class LSTMUnit(Unit):
     def __init__(self, name, *args,
-                 dropout=0, trainable_initial=False, **kwargs):
+                 gate=None, dropout=0, trainable_initial=False, **kwargs):
         super().__init__(name)
-        self.add(LSTM('gate', *args, **kwargs))
+        gate = gate if gate is not None else LSTM('gate', *args, **kwargs)
+        self.add(gate)
         if trainable_initial:
             self.param('h_0', (self.gate.state_dims,),
                        init_f=init.Gaussian(fan_in=self.gate.state_dims))
