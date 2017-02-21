@@ -82,25 +82,9 @@ class DeepSequence(Model):
 
     def __call__(self, inputs, inputs_mask,
                  nontrainable_recurrent_inits=None, non_sequences=None):
-        # combine trainable and nontrainable inits
-        inits_in = []
         batch_size = inputs.shape[1]
-        for rec in self.recurrences:
-            if rec.init is None:
-                # nontrainable init is passed in as argument
-                try:
-                    inits_in.append(nontrainable_recurrent_inits.pop(0))
-                except IndexError:
-                    raise Exception('Too few nontrainable_recurrent_inits. '
-                        ' Init for {} onwards missing'.format(rec))
-            elif rec.init == OutputOnly:
-                # no init needed
-                inits_in.append(None)
-            else:
-                # trainable inits must be expanded to batch size
-                inits_in.append(
-                    expand_to_batch(rec.init, batch_size))
-            # FIXME: make dropout masks here
+        inits_in = self.make_inits(
+            nontrainable_recurrent_inits, batch_size, include_nones=True)
         seqs_in = [{'input': inputs, 'taps': [self.offset]},
                    {'input': inputs_mask, 'taps': [self.offset]}]
         # FIXME: add extra sequences, if needed
@@ -116,20 +100,34 @@ class DeepSequence(Model):
         # returns: final_out, states, outputs
         return self.group_outputs(seqs)
 
-    def group_outputs(self, seqs):
-        """group outputs in a useful way"""
-        # main output of final unit
-        final_out = seqs[self.final_out_idx]
-        # true recurrent states (inputs for next iteration)
-        states = []
-        # OutputOnly are not fed into next iteration
-        outputs = []
-        for (rec, seq) in zip(self.recurrences, seqs):
-            if rec.init == OutputOnly:
-                outputs.append(seq)
+    def make_inits(self, nontrainable_recurrent_inits, batch_size,
+                   include_nones=False, do_eval=False):
+        if nontrainable_recurrent_inits is None:
+            nontrainable_recurrent_inits = []
+        else:
+            nontrainable_recurrent_inits = list(nontrainable_recurrent_inits)
+        # combine trainable and nontrainable inits
+        inits_in = []
+        for rec in self.recurrences:
+            if rec.init is None:
+                # nontrainable init is passed in as argument
+                try:
+                    inits_in.append(nontrainable_recurrent_inits.pop(0))
+                except IndexError:
+                    raise Exception('Too few nontrainable_recurrent_inits. '
+                        ' Init for {} onwards missing'.format(rec))
+            elif rec.init == OutputOnly:
+                # no init needed
+                if include_nones:
+                    inits_in.append(None)
             else:
-                states.append(seq)
-        return final_out, states, outputs
+                # trainable inits must be expanded to batch size
+                trainable = expand_to_batch(rec.init, batch_size)
+                if do_eval:
+                    trainable = trainable.eval()
+                inits_in.append(trainable)
+            # FIXME: make dropout masks here
+        return inits_in
 
     def make_nonsequences(self, non_sequences,
                           include_params=True, do_eval=False):
@@ -153,6 +151,21 @@ class DeepSequence(Model):
         if include_params:
             non_sequences_in.extend(self.unit_parameters_list())
         return non_sequences_in
+
+    def group_outputs(self, seqs):
+        """group outputs in a useful way"""
+        # main output of final unit
+        final_out = seqs[self.final_out_idx]
+        # true recurrent states (inputs for next iteration)
+        states = []
+        # OutputOnly are not fed into next iteration
+        outputs = []
+        for (rec, seq) in zip(self.recurrences, seqs):
+            if rec.init == OutputOnly:
+                outputs.append(seq)
+            else:
+                states.append(seq)
+        return final_out, states, outputs
 
     def ns_func(self, ns):
         if ns not in self._ns_func_cache:

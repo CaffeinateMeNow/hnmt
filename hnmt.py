@@ -326,15 +326,19 @@ class NMT(Model):
         # list of models in the ensemble
         models = [self] + others
         n_models = len(models)
+        batch_size = inputs.shape[1]
 
         # OBS: this assumes that inits for residual layers are trainable
+        # (encode_fun only returns one pair of h_0, c_0)
         models_init = []
         models_attended = []
         non_sequences = []
         for m in models:
             h_0, c_0, attended = m.encode_fun(
                 inputs, inputs_mask, chars, chars_mask)
-            models_init.append((h_0, c_0))
+            models_init.append(m.decoder.make_inits(
+                (h_0, c_0), batch_size,
+                include_nones=False, do_eval=True))
             models_attended.append(attended)
             non_sequences.append(m.decoder.make_nonsequences(
                 [attended, inputs_mask],
@@ -357,10 +361,10 @@ class NMT(Model):
                 # relevant non-sequences need to be selected by sentence
                 for non_seq in non_sequences[idx]:
                     args.append(non_seq[:,sent_indices,...])
-                final_out, states, outputs = model.decoder.group_outputs(
+                final_out, states_out, outputs = model.decoder.group_outputs(
                     model.decoder.step_fun()(*args))
                 models_out.append(final_out)
-                models_states.append(states)
+                models_states.append(states_out)
                 models_att.append(outputs[0])
 
             mean_attention = np.array(
@@ -375,7 +379,7 @@ class NMT(Model):
         return beam_with_coverage(
                 step,
                 models_init,
-                models_init[0][0].shape[0],
+                batch_size,
                 self.config['trg_encoder']['<S>'],
                 self.config['trg_encoder']['</S>'],
                 max_length,
