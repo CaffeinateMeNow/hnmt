@@ -232,20 +232,19 @@ class NMT(Model):
             attention_dims=config['attention_dims'],
             attended_dims=2*config['encoder_state_dims'],
             trainable_initial=False)]
+        for i in range(config['decoder_residual_layers']):
+            decoder_units.append(
+                ResidualUnit(LSTMUnit(
+                        'decoder_residual_{}'.format(i),
+                        config['decoder_state_dims'],
+                        config['decoder_state_dims'],
+                        layernorm=config['decoder_layernorm'],
+                        dropout=config['recurrent_dropout'],
+                        trainable_initial=True)))
         self.add(DeepSequence(
             'decoder',
             decoder_units,
             backwards=False, offset=-1))
-        #for i in range(config['decoder_residual_layers']):
-        #    self.add(LSTMSequence(
-        #        'decoder_residual_{}'.format(i),
-        #        False,
-        #        config['decoder_state_dims'],
-        #        config['decoder_state_dims'],
-        #        layernorm=config['decoder_layernorm'],
-        #        dropout=config['recurrent_dropout'],
-        #        trainable_initial=True,
-        #        offset=0))
 
         h_t = T.matrix('h_t')
         self.predict_fun = function(
@@ -452,10 +451,6 @@ class NMT(Model):
         c_seq = states[self.decoder.final_out_idx + 1]
         attention_seq = outputs[0]
         pred_seq = softmax_3d(self.emission(T.tanh(self.hidden(h_seq))))
-        theano.printing.pydotprint(
-            [pred_seq, attention_seq],
-            outfile='deepstack.png',
-            scan_graphs=True)
 
         return pred_seq, attention_seq
 
