@@ -156,6 +156,11 @@ class NMT(Model):
             len(config['trg_encoder']),
             config['trg_embedding_dims']))
 
+        self.add(Embeddings(
+            'trg_char_embeddings',
+            len(config['trg_char_encoder']),
+            config['src_char_embedding_dims']))  # FIXME separate?
+
         self.add(Linear(
             'hidden',
             config['decoder_state_dims'],
@@ -170,6 +175,19 @@ class NMT(Model):
             w=self.trg_embeddings._w.T))
 
         self.add(Linear(
+            'char_hidden',
+            config['char_decoder_state_dims'],
+            config['src_char_embedding_dims'],
+            dropout=config['dropout'],
+            layernorm=config['layernorm']))
+
+        self.add(Linear(
+            'char_emission',
+            config['src_char_embedding_dims'],
+            len(config['trg_char_encoder']),
+            w=self.trg_char_embeddings._w.T))
+
+        self.add(Linear(
             'proj_h0',
             config['encoder_state_dims'],
             config['decoder_state_dims'],
@@ -180,6 +198,20 @@ class NMT(Model):
             'proj_c0',
             config['encoder_state_dims'],
             config['decoder_state_dims'],
+            dropout=config['dropout'],
+            layernorm=config['layernorm']))
+
+        self.add(Linear(
+            'proj_char_h0',
+            config['decoder_state_dims'],
+            config['char_decoder_state_dims'],
+            dropout=config['dropout'],
+            layernorm=config['layernorm']))
+
+        self.add(Linear(
+            'proj_char_c0',
+            config['decoder_state_dims'],
+            config['char_decoder_state_dims'],
             dropout=config['dropout'],
             layernorm=config['layernorm']))
 
@@ -246,6 +278,27 @@ class NMT(Model):
             decoder_units,
             backwards=False, offset=-1))
 
+        char_decoder_units = [LSTMUnit(
+            'char_decoder',
+            config['src_char_embedding_dims'],  # FIXME: rename?
+            config['char_decoder_state_dims'],
+            layernorm=config['decoder_layernorm'],
+            dropout=config['recurrent_dropout'],
+            trainable_initial=False)]
+        for i in range(config['char_decoder_residual_layers']):
+            char_decoder_units.append(
+                ResidualUnit(LSTMUnit(
+                        'char_decoder_residual_{}'.format(i),
+                        config['decoder_state_dims'],
+                        config['decoder_state_dims'],
+                        layernorm=config['decoder_layernorm'],
+                        dropout=config['recurrent_dropout'],
+                        trainable_initial=True)))
+        self.add(DeepSequence(
+            'char_decoder',
+            char_decoder_units,
+            backwards=False, offset=-1))
+
         h_t = T.matrix('h_t')
         self.predict_fun = function(
                 [h_t],
@@ -257,20 +310,25 @@ class NMT(Model):
         chars_mask = T.bmatrix('chars_mask')
         outputs = T.lmatrix('outputs')
         outputs_mask = T.bmatrix('outputs_mask')
+        out_chars = T.lmatrix('out_chars')
+        out_chars_mask = T.bmatrix('out_chars_mask')
         attention = T.tensor3('attention')
 
         self.x = [inputs, inputs_mask, chars, chars_mask]
-        self.y = [outputs, outputs_mask, attention]
+        self.y = [outputs, outputs_mask, out_chars, out_chars_mask, attention]
 
         self.encode_fun = function(self.x, self.encode(*self.x))
         self.xent_fun = function(self.x+self.y, self.xent(*(self.x+self.y)))
 
     def xent(self, inputs, inputs_mask, chars, chars_mask,
-             outputs, outputs_mask, attention):
-        pred_outputs, pred_attention = self(
-                inputs, inputs_mask, chars, chars_mask, outputs, outputs_mask)
+             outputs, outputs_mask, out_chars, out_chars_mask, attention):
+        pred_outputs, pred_char_outputs, pred_attention = self(
+                inputs, inputs_mask, chars, chars_mask,
+                outputs, outputs_mask, out_chars, out_chars_mask)
         outputs_xent = batch_sequence_crossentropy(
                 pred_outputs, outputs[1:], outputs_mask[1:])
+        char_outputs_xent = batch_sequence_crossentropy(
+                pred_char_outputs, out_chars[1:], out_chars_mask[1:])
         # Note that pred_attention will contain zero elements for masked-out
         # character positions, to avoid trouble with log() we add 1 for zero
         # element of attention (which after multiplication will be removed
@@ -284,7 +342,7 @@ class NMT(Model):
                    -attention[1:]
                  * T.log(epsilon + pred_attention + (1-attention_mask))
                  * attention_mask).sum() / batch_size
-        return outputs_xent, attention_xent
+        return outputs_xent + char_outputs_xent, attention_xent
 
     def loss(self, *args):
         outputs_xent, attention_xent = self.xent(*args)
@@ -444,8 +502,14 @@ class NMT(Model):
         return h_0, c_0, attended
 
     def __call__(self, inputs, inputs_mask, chars, chars_mask,
-                 outputs, outputs_mask):
-        embedded_outputs = self.trg_embeddings(outputs)
+                 outputs, outputs_mask, out_chars, out_chars_mask):
+        # Compute separate mask for character level (UNK) words
+        # (with symbol < 0).
+        charlevel_mask = outputs_mask * T.lt(outputs, 0)
+        charlevel_indices = T.nonzero(charlevel_mask)
+        # word level decoder
+        unked_outputs = outputs * charlevel_mask
+        embedded_outputs = self.trg_embeddings(unked_outputs)
         h_0, c_0, attended = self.encode(
                 inputs, inputs_mask, chars, chars_mask)
         h_seq, states, outputs = self.decoder(
@@ -456,7 +520,19 @@ class NMT(Model):
         attention_seq = outputs[0]
         pred_seq = softmax_3d(self.emission(T.tanh(self.hidden(h_seq))))
 
-        return pred_seq, attention_seq
+        # char level decoder
+        embedded_char_outputs = self.trg_char_embeddings(out_chars)
+        char_h_0 = self.proj_char_h0(
+            h_seq[charlevel_indices[0], charlevel_indices[1], :])
+        char_c_0 = self.proj_char_c0(
+            c_seq[charlevel_indices[0], charlevel_indices[1], :])
+        char_h_seq, char_states, char_outputs = self.char_decoder(
+                embedded_char_outputs, out_chars_mask,
+                [char_h_0, char_c_0])
+        char_pred_seq = softmax_3d(self.char_emission(
+            T.tanh(self.char_hidden(char_h_seq))))
+
+        return pred_seq, char_pred_seq, attention_seq
 
     def create_optimizer(self):
         return Adam(
@@ -587,10 +663,10 @@ def main():
             help='convert target text to lowercase before processing')
     parser.add_argument('--source-vocabulary', type=int, default=10000,
             metavar='N',
-            help='maximum size of source vocabulary')
-    parser.add_argument('--target-vocabulary', type=int, default=None,
+            help='maximum size of source word-level vocabulary')
+    parser.add_argument('--target-vocabulary', type=int, default=10000,
             metavar='N',
-            help='maximum size of target vocabulary')
+            help='maximum size of target word-level vocabulary')
     parser.add_argument('--min-char-count', type=int,
             metavar='N',
             help='drop all characters with count < N in training data')
@@ -618,7 +694,10 @@ def main():
             help='size of encoder state')
     parser.add_argument('--decoder-state-dims', type=int, default=512,
             metavar='N',
-            help='size of decoder state')
+            help='size of decoder state for word level')
+    parser.add_argument('--char-decoder-state-dims', type=int, default=128,
+            metavar='N',
+            help='size of decoder state for char level')
     parser.add_argument('--attention-dims', type=int, default=1024,
             metavar='N',
             help='size of attention vectors')
@@ -627,7 +706,10 @@ def main():
             help='number of residual layers in encoder')
     parser.add_argument('--decoder-residual-layers', type=int, default=0,
             metavar='N',
-            help='number of residual layers in decoder')
+            help='number of residual layers in word decoder')
+    parser.add_argument('--char-decoder-residual-layers', type=int, default=0,
+            metavar='N',
+            help='number of residual layers in character decoder')
     parser.add_argument('--alignment-loss', type=float, default=0.0,
             metavar='X',
             help='alignment cross-entropy contribution to loss function')
@@ -866,12 +948,15 @@ def main():
                     sequences=src_sents,
                     max_vocab=args.source_vocabulary,
                     sub_encoder=src_char_encoder)
+            trg_char_encoder = TextEncoder(
+                    sequences=[token for sent in trg_sents for token in sent],
+                    min_count=args.min_char_count,
+                    special=())
             trg_encoder = TextEncoder(
                     sequences=trg_sents,
                     max_vocab=args.target_vocabulary,
-                    min_count=(args.min_char_count
-                               if config['target_tokenizer'] == 'char'
-                               else None),
+                    min_count=None,
+                    sub_encoder=trg_char_encoder,
                     special=(('<S>', '</S>')
                              if config['target_tokenizer'] == 'char'
                              else ('<S>', '</S>', '<UNK>')))
@@ -887,6 +972,7 @@ def main():
             config.update({
                 'src_encoder': src_encoder,
                 'trg_encoder': trg_encoder,
+                'trg_char_encoder': trg_char_encoder,
                 'src_embedding_dims': args.word_embedding_dims,
                 'trg_embedding_dims': trg_embedding_dims,
                 'src_char_embedding_dims': args.char_embedding_dims,
@@ -896,9 +982,11 @@ def main():
                 'dropout': args.dropout,
                 'encoder_state_dims': args.encoder_state_dims,
                 'decoder_state_dims': args.decoder_state_dims,
+                'char_decoder_state_dims': args.char_decoder_state_dims,
                 'attention_dims': args.attention_dims,
                 'encoder_residual_layers': args.encoder_residual_layers,
                 'decoder_residual_layers': args.decoder_residual_layers,
+                'char_decoder_residual_layers': args.char_decoder_residual_layers,
                 'layernorm': args.layer_normalization,
                 'alignment_loss': args.alignment_loss,
                 'alignment_decay': args.alignment_decay,
@@ -1044,7 +1132,9 @@ def main():
             for batch_pairs in iterate_batches(
                     test_pairs, config['batch_size']):
                 test_x, test_y = prepare_batch(batch_pairs)
-                test_outputs, test_outputs_mask, test_attention = test_y
+                (test_outputs, test_outputs_mask,
+                 test_char_outputs, test_char_mask,
+                 test_attention) = test_y
                 test_xent, test_xent_attention = model.xent_fun(
                         *(test_x + test_y))
                 scale = (test_outputs.shape[1] /
