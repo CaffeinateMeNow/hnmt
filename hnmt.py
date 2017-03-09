@@ -383,7 +383,8 @@ class NMT(Model):
 
     def search(self, inputs, inputs_mask, chars, chars_mask,
                max_length, beam_size=8,
-               alpha=0.2, beta=0.2, len_smooth=5.0, others=[]):
+               alpha=0.2, beta=0.2, len_smooth=5.0, others=[],
+               expand_n=1):
         # list of models in the ensemble
         models = [self] + others
         n_models = len(models)
@@ -409,7 +410,11 @@ class NMT(Model):
         models_embeddings = [
                 m.trg_embeddings._w.get_value(borrow=False)
                 for m in models]
+        models_char_embeddings = [
+                m.trg_char_embeddings._w.get_value(borrow=False)
+                for m in models]
 
+        # word level decoding
         def step(i, states, outputs, outputs_mask, sent_indices):
             models_out = []
             models_states = []
@@ -422,11 +427,11 @@ class NMT(Model):
                 # relevant non-sequences need to be selected by sentence
                 for non_seq in non_sequences[idx]:
                     args.append(non_seq[:,sent_indices,...])
-                final_out, states_out, outputs = model.decoder.group_outputs(
+                final_out, states_out, out_seqs = model.decoder.group_outputs(
                     model.decoder.step_fun()(*args))
                 models_out.append(final_out)
                 models_states.append(states_out)
-                models_att.append(outputs[0])
+                models_att.append(out_seqs[0])
 
             mean_attention = np.array(
                     [models_att[idx] for idx in range(n_models)]
@@ -437,18 +442,98 @@ class NMT(Model):
             dist = models_predict.mean(axis=0)
             return (models_states, dist, mean_attention)
 
-        return beam_with_coverage(
+        word_level = beam_with_coverage(
                 step,
                 models_init,
                 batch_size,
                 self.config['trg_encoder']['<S>'],
                 self.config['trg_encoder']['</S>'],
+                self.config['trg_encoder']['<UNK>'],
                 max_length,
                 inputs_mask,
                 beam_size=beam_size,
                 alpha=alpha,
                 beta=beta,
-                len_smooth=len_smooth)
+                len_smooth=len_smooth,
+                prune_margin=3.0,
+                keep_unk_states=True)
+
+        def char_step(i, states, outputs, outputs_mask, sent_indices):
+            models_out = []
+            models_states = []
+            for (idx, model) in enumerate(models):
+                args = [models_char_embeddings[idx][outputs[-1]],
+                        outputs_mask]
+                # add stored recurrent inputs
+                args.extend(states[idx])
+                # char decoder has no non-sequences
+                final_out, states_out, out_seqs = model.char_decoder.group_outputs(
+                    model.char_decoder.step_fun()(*args))
+                models_out.append(final_out)
+                models_states.append(states_out)
+
+            models_predict = np.array(
+                    [models[idx].predict_fun(models_out[idx])
+                     for idx in range(n_models)])
+            dist = models_predict.mean(axis=0)
+            return (models_states, dist, None)
+
+        # character level decoding
+        expanded = []
+        for (_, beam) in word_level:
+            expanded_sent = []
+            for i in range(expand_n):
+                hyp = next(beam)
+                word_level_seq = hyp.history + (hyp.last_sym,)
+                # FIXME debug: output of word level deco
+                print(self.config['trg_encoder'].decode_sentence(
+                    Encoded(word_level_seq, None)))
+                # FIXME FIXME: need to map from word level to char level states
+                unks = [[np.array(x) for x in zip(*y)]
+                        for y in zip(*hyp.unks)]
+                n_unks = len(hyp.unks)
+                char_level = beam_with_coverage(
+                        char_step,
+                        unks,
+                        n_unks,
+                        self.config['trg_char_encoder']['<S>'],
+                        self.config['trg_char_encoder']['</S>'],
+                        None,
+                        max_length, # FIXME: max word length
+                        None,
+                        beam_size=beam_size,
+                        alpha=0,
+                        beta=0,
+                        len_smooth=len_smooth,
+                        prune_margin=3.0,
+                        keep_unk_states=False)
+                char_encodings = []
+                for (_, char_beam) in char_level:
+                    char_hyp = next(char_beam)
+                    print('char_hyp.history')
+                    print(char_hyp.history)
+                    print('char_hyp.last_sym')
+                    print(char_hyp.last_sym)
+                    char_encodings.append(
+                        char_hyp.history + (char_hyp.last_sym,))
+                encoded = Encoded(
+                    self.number_unks(word_level_seq, len(char_encodings)),
+                    char_encodings)
+                expanded_sent.append(encoded)
+            expanded.append(expanded_sent)
+        return expanded
+
+    def number_unks(self, word_level_seq, max_unks):
+        numbered = []
+        current = 1
+        unk_symbol = self.config['trg_encoder']['<UNK>']
+        for symbol in word_level_seq:
+            if symbol == unk_symbol and current <= max_unks:
+                numbered.append(-current)
+                current += 1
+            else:
+                numbered.append(symbol)
+        return numbered
 
     def encode(self, inputs, inputs_mask, chars, chars_mask):
         # First run a bidirectional LSTM encoder over the unknown word
@@ -959,8 +1044,7 @@ def main():
                     sub_encoder=src_char_encoder)
             trg_char_encoder = TextEncoder(
                     sequences=[token for sent in trg_sents for token in sent],
-                    min_count=args.min_char_count,
-                    special=())
+                    min_count=args.min_char_count)
             trg_encoder = TextEncoder(
                     sequences=trg_sents,
                     max_vocab=args.target_vocabulary,
@@ -1024,16 +1108,18 @@ def main():
                 batch_sents = [config['src_encoder'].encode_sequence(sent)
                                for sent in batch_sents]
             x = config['src_encoder'].pad_sequences(batch_sents)
-            beams = model.search(
+            sentences = model.search(
                     *(x + (config['max_target_length'],)),
                     beam_size=config['beam_size'],
                     alpha=config['alpha'],
                     beta=config['beta'],
                     len_smooth=config['len_smooth'],
                     others=models[1:])
-            for (_, beam) in beams:
-                best = next(beam)
-                encoded = Encoded(best.history + (best.last_sym,), None)
+            for sentence in sentences:
+                encoded = sentence[0]
+                print('sentence[0]')
+                print(encoded)
+                print(type(encoded))
                 yield detokenize(
                     config['trg_encoder'].decode_sentence(encoded),
                     config['target_tokenizer'])

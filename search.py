@@ -14,7 +14,8 @@ Hypothesis = namedtuple(
      'history',     # sequence up to last symbol
      'last_sym',    # last symbol
      'states',      # RNN state
-     'coverage'])   # accumulated coverage
+     'coverage',    # accumulated coverage
+     'unks'])       # states at UNK symbols
 
 def by_sentence(beams):
     return itertools.groupby(
@@ -28,6 +29,7 @@ def beam_with_coverage(
         batch_size,
         start_symbol,
         stop_symbol,
+        unk_symbol,
         max_length,
         inputs_mask,
         beam_size=8,
@@ -35,7 +37,8 @@ def beam_with_coverage(
         alpha=0.2,
         beta=0.2,
         len_smooth=5.0,
-        prune_margin=3.0):
+        prune_margin=3.0,
+        keep_unk_states=True):
     """Beam search algorithm.
 
     See the documentation for :meth:`greedy()`.
@@ -57,7 +60,7 @@ def beam_with_coverage(
 
     beams = [Hypothesis(i, 0., -1e30, (), start_symbol,
                         [[s[i, :] for s in ms] for ms in states0],
-                        1e-30)
+                        1e-30, ())
              for i in range(batch_size)]
 
     for i in range(max_length-2):
@@ -100,7 +103,10 @@ def beam_with_coverage(
                 score = hyp.score + all_dists[j, symbol]
                 norm_score = -1e30
                 # attention: (batch, source_pos)
-                coverage = hyp.coverage + attention[j, :]
+                if attention is not None:
+                    coverage = hyp.coverage + attention[j, :]
+                else:
+                    coverage = None
                 if symbol == stop_symbol:
                     # length penalty
                     # (history contains start symbol but not stop symbol)
@@ -111,34 +117,35 @@ def beam_with_coverage(
                         lp = 1
                     # coverage penalty
                     # apply mask: adding 1 to masked elements removes penalty
-                    if beta > 0:
+                    if beta > 0 and coverage is not None:
                         coverage += (1. - inputs_mask[:, hyp.sentence])
                         cp = beta * np.sum(np.log(
                             np.minimum(coverage, np.ones_like(coverage))))
                     else:
                         cp = 0
                     norm_score = (score / lp) + cp
-                    #print('score before norm: {} after norm: {} (lp: {} cp: {}, len: {})'.format(score, norm_score, lp, cp, len(history)))
+                new_states = [[s[j, :] for s in ms] for ms in all_states]
+                if keep_unk_states and symbol == unk_symbol:
+                    unks = hyp.unks + (new_states,)
+                else:
+                    unks = hyp.unks
                 extended.append(
                     Hypothesis(hyp.sentence,
                                score,
                                norm_score,
                                history,
                                symbol,
-                               [[s[j, :] for s in ms] for ms in all_states],
-                               coverage))
+                               new_states,
+                               coverage,
+                               unks))
 
         # prune hypotheses
         beams = []
         for (_, group) in by_sentence(completed + extended):
             group = list(group)
-            #print('hyps before pruning: {}'.format(len(group)))
             best_normalized = max(hyp.norm_score for hyp in group)
             group = [hyp for hyp in group
                      if hyp.last_sym != stop_symbol
                         or hyp.norm_score > best_normalized - prune_margin]
-            #print('hyps after pruning with {} - {}: {}'.format(best_normalized, prune_margin, len(group)))
             beams.extend(sorted(group, key=lambda hyp: -hyp.score)[:beam_size])
-        #print('hyps after pruning {}'.format(len(beams)))
-        #print('score of 0: {}, score of 1: {}'.format(beams[0].score, beams[1].score))
     return by_sentence(beams)
