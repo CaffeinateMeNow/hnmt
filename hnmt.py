@@ -322,11 +322,14 @@ class NMT(Model):
 
     def xent(self, inputs, inputs_mask, chars, chars_mask,
              outputs, outputs_mask, out_chars, out_chars_mask, attention):
+        unked_outputs, charlevel_indices = self.split_unk_outputs(
+            outputs, outputs_mask)
         pred_outputs, pred_char_outputs, pred_attention = self(
                 inputs, inputs_mask, chars, chars_mask,
-                outputs, outputs_mask, out_chars, out_chars_mask)
+                unked_outputs, charlevel_indices, outputs_mask,
+                out_chars, out_chars_mask)
         outputs_xent = batch_sequence_crossentropy(
-                pred_outputs, outputs[1:], outputs_mask[1:])
+                pred_outputs, unked_outputs[1:], outputs_mask[1:])
         char_outputs_xent = batch_sequence_crossentropy(
                 pred_char_outputs, out_chars[1:], out_chars_mask[1:])
         # Note that pred_attention will contain zero elements for masked-out
@@ -501,23 +504,29 @@ class NMT(Model):
         attended = T.concatenate([fwd_h_seq, back_h_seq], axis=-1)
         return h_0, c_0, attended
 
-    def __call__(self, inputs, inputs_mask, chars, chars_mask,
-                 outputs, outputs_mask, out_chars, out_chars_mask):
+    def split_unk_outputs(self, outputs, outputs_mask):
         # Compute separate mask for character level (UNK) words
         # (with symbol < 0).
         charlevel_mask = outputs_mask * T.lt(outputs, 0)
         charlevel_indices = T.nonzero(charlevel_mask)
         # word level decoder
-        unked_outputs = outputs * charlevel_mask
+        unked_outputs = (1 - charlevel_mask) * outputs
+        unked_outputs += charlevel_mask * T.as_tensor(
+            self.config['trg_encoder'].index['<UNK>'])
+        return unked_outputs, charlevel_indices
+
+    def __call__(self, inputs, inputs_mask, chars, chars_mask,
+                 unked_outputs, charlevel_indices,
+                 outputs_mask, out_chars, out_chars_mask):
         embedded_outputs = self.trg_embeddings(unked_outputs)
         h_0, c_0, attended = self.encode(
                 inputs, inputs_mask, chars, chars_mask)
-        h_seq, states, outputs = self.decoder(
+        h_seq, states, deco_outputs = self.decoder(
                 embedded_outputs, outputs_mask,
                 [h_0, c_0],
                 [attended, inputs_mask])
         c_seq = states[self.decoder.final_out_idx + 1]
-        attention_seq = outputs[0]
+        attention_seq = deco_outputs[0]
         pred_seq = softmax_3d(self.emission(T.tanh(self.hidden(h_seq))))
 
         # char level decoder
