@@ -548,6 +548,7 @@ class NMT(Model):
         # and that the char level decoder only has
         # a single layer with non-trainable inits
 
+        n_words = len(hyp_unks)
         # hyp_unks: nested 3d-list (word, model, state)
         char_inits = []
         # transpose to (model, word, state)
@@ -559,9 +560,11 @@ class NMT(Model):
             h = np.array(model_states[0])
             c = np.array(model_states[1])
             # map to char level
-            char_h = model.proj_char_h0_func(h)
-            char_c = model.proj_char_c0_func(c)
-            char_inits.append([char_h, char_c])
+            char_h_0 = model.proj_char_h0_func(h)
+            char_c_0 = model.proj_char_c0_func(c)
+            char_inits.append(model.char_decoder.make_inits(
+                (char_h_0, char_c_0), n_words,
+                include_nones=False, do_eval=True))
         return char_inits
 
     def encode(self, inputs, inputs_mask, chars, chars_mask):
