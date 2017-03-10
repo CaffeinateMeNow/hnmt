@@ -508,7 +508,7 @@ class NMT(Model):
                         self.config['trg_char_encoder']['<S>'],
                         self.config['trg_char_encoder']['</S>'],
                         None,
-                        max_length, # FIXME: max word length
+                        self.config['max_word_length'],
                         None,
                         beam_size=beam_size,
                         alpha=0,
@@ -770,6 +770,10 @@ def main():
             default=argparse.SUPPRESS,
             help='maximum length of target sentence '
                  '(unit given by --target-tokenizer)')
+    parser.add_argument('--max-word-length', type=int,
+            metavar='N',
+            default=argparse.SUPPRESS,
+            help='maximum length of target word in chars')
     parser.add_argument('--batch-size', type=int, default=argparse.SUPPRESS,
             metavar='N',
             help='minibatch size of devset (FIXME)')
@@ -869,6 +873,7 @@ def main():
             'target_tokenizer': 'char',
             'max_source_length': None,
             'max_target_length': None,
+            'max_word_length': 30,
             'source': None,
             'target': None,
             'test_source': None,
@@ -975,6 +980,7 @@ def main():
 
         max_source_length = config['max_source_length']
         max_target_length = config['max_target_length']
+        # FIXME: filter out sentences with words exceeding max_word_length
 
         def accept_pair(pair):
             src_len, trg_len = list(map(len, pair))
