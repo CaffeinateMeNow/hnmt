@@ -289,8 +289,8 @@ class NMT(Model):
             char_decoder_units.append(
                 ResidualUnit(LSTMUnit(
                         'char_decoder_residual_{}'.format(i),
-                        config['decoder_state_dims'],
-                        config['decoder_state_dims'],
+                        config['char_decoder_state_dims'],
+                        config['char_decoder_state_dims'],
                         layernorm=config['decoder_layernorm'],
                         dropout=config['recurrent_dropout'],
                         trainable_initial=True)))
@@ -303,6 +303,10 @@ class NMT(Model):
         self.predict_fun = function(
                 [h_t],
                 T.nnet.softmax(self.emission(T.tanh(self.hidden(h_t)))))
+        char_h_t = T.matrix('char_h_t')
+        self.char_predict_fun = function(
+                [char_h_t],
+                T.nnet.softmax(self.char_emission(T.tanh(self.char_hidden(char_h_t)))))
 
         inputs = T.lmatrix('inputs')
         inputs_mask = T.bmatrix('inputs_mask')
@@ -319,6 +323,11 @@ class NMT(Model):
 
         self.encode_fun = function(self.x, self.encode(*self.x))
         self.xent_fun = function(self.x+self.y, self.xent(*(self.x+self.y)))
+
+        word_h = T.fmatrix('word_h')
+        word_c = T.fmatrix('word_c')
+        self.proj_char_h0_func = function([word_h], self.proj_char_h0(word_h))
+        self.proj_char_c0_func = function([word_c], self.proj_char_c0(word_c))
 
     def xent(self, inputs, inputs_mask, chars, chars_mask,
              outputs, outputs_mask, out_chars, out_chars_mask, attention):
@@ -458,7 +467,7 @@ class NMT(Model):
                 prune_margin=3.0,
                 keep_unk_states=True)
 
-        def char_step(i, states, outputs, outputs_mask, sent_indices):
+        def char_step(i, states, outputs, outputs_mask, word_indices):
             models_out = []
             models_states = []
             for (idx, model) in enumerate(models):
@@ -473,7 +482,7 @@ class NMT(Model):
                 models_states.append(states_out)
 
             models_predict = np.array(
-                    [models[idx].predict_fun(models_out[idx])
+                    [models[idx].char_predict_fun(models_out[idx])
                      for idx in range(n_models)])
             dist = models_predict.mean(axis=0)
             return (models_states, dist, None)
@@ -485,12 +494,12 @@ class NMT(Model):
             for i in range(expand_n):
                 hyp = next(beam)
                 word_level_seq = hyp.history + (hyp.last_sym,)
-                # FIXME debug: output of word level deco
-                print(self.config['trg_encoder'].decode_sentence(
-                    Encoded(word_level_seq, None)))
-                # FIXME FIXME: need to map from word level to char level states
-                unks = [[np.array(x) for x in zip(*y)]
-                        for y in zip(*hyp.unks)]
+                # FIXME debug
+                print('output of word level decoder:')
+                print(' '.join(self.config['trg_encoder'].decode_sentence(
+                    Encoded(word_level_seq, None))))
+                # map from word level decoder states to char level states
+                unks = self.word_to_char_states(hyp.unks, models)
                 n_unks = len(hyp.unks)
                 char_level = beam_with_coverage(
                         char_step,
@@ -510,12 +519,9 @@ class NMT(Model):
                 char_encodings = []
                 for (_, char_beam) in char_level:
                     char_hyp = next(char_beam)
-                    print('char_hyp.history')
-                    print(char_hyp.history)
-                    print('char_hyp.last_sym')
-                    print(char_hyp.last_sym)
                     char_encodings.append(
-                        char_hyp.history + (char_hyp.last_sym,))
+                        Encoded(char_hyp.history + (char_hyp.last_sym,),
+                                None))
                 encoded = Encoded(
                     self.number_unks(word_level_seq, len(char_encodings)),
                     char_encodings)
@@ -534,6 +540,29 @@ class NMT(Model):
             else:
                 numbered.append(symbol)
         return numbered
+
+    def word_to_char_states(self, hyp_unks, models):
+        """map from word level decoder states to char level states"""
+        # this method assumes that the word level decoder has
+        # a single layer (indices 0 and 1 are the relevant hidden states)
+        # and that the char level decoder only has
+        # a single layer with non-trainable inits
+
+        # hyp_unks: nested 3d-list (word, model, state)
+        char_inits = []
+        # transpose to (model, word, state)
+        hyp_unks = zip(*hyp_unks)
+        for (model, model_states) in zip(models, hyp_unks):
+            # transpose to (state, word)
+            model_states = tuple(zip(*model_states))
+            # stack the words into a minibatch
+            h = np.array(model_states[0])
+            c = np.array(model_states[1])
+            # map to char level
+            char_h = model.proj_char_h0_func(h)
+            char_c = model.proj_char_c0_func(c)
+            char_inits.append([char_h, char_c])
+        return char_inits
 
     def encode(self, inputs, inputs_mask, chars, chars_mask):
         # First run a bidirectional LSTM encoder over the unknown word
@@ -1117,9 +1146,6 @@ def main():
                     others=models[1:])
             for sentence in sentences:
                 encoded = sentence[0]
-                print('sentence[0]')
-                print(encoded)
-                print(type(encoded))
                 yield detokenize(
                     config['trg_encoder'].decode_sentence(encoded),
                     config['target_tokenizer'])
