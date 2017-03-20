@@ -320,6 +320,8 @@ class NMT(Model):
 
 
         def step(i, states, outputs, outputs_mask, sent_indices):
+            # FIXME: this comprehension is a cpu hotspot
+            # probably due to sent_indices
             models_result = [
                     models[idx].decoder.step_fun()(
                         models_embeddings[idx][outputs[-1]],
