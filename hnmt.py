@@ -626,7 +626,8 @@ class NMT(Model):
         # (with symbol < 0).
         charlevel_mask = outputs_mask * T.lt(outputs, 0)
         charlevel_indices = T.nonzero(charlevel_mask)
-        # word level decoder
+        # shortlisted words directly in word level decoder,
+        # but char level replaced with unk
         unked_outputs = (1 - charlevel_mask) * outputs
         unked_outputs += charlevel_mask * T.as_tensor(
             self.config['trg_encoder'].index['<UNK>'])
