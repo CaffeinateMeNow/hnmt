@@ -650,9 +650,9 @@ class NMT(Model):
         # char level decoder
         embedded_char_outputs = self.trg_char_embeddings(out_chars)
         char_h_0 = self.proj_char_h0(
-            h_seq[charlevel_indices[0], charlevel_indices[1], :])
+            h_seq[charlevel_indices[0] - 1, charlevel_indices[1], :])
         char_c_0 = self.proj_char_c0(
-            c_seq[charlevel_indices[0], charlevel_indices[1], :])
+            c_seq[charlevel_indices[0] - 1, charlevel_indices[1], :])
         char_h_seq, char_states, char_outputs = self.char_decoder(
                 embedded_char_outputs, out_chars_mask,
                 [char_h_0, char_c_0])
