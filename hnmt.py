@@ -809,7 +809,7 @@ def main():
     parser.add_argument('--recurrent-dropout', type=float, default=0.0,
             metavar='FRACTION',
             help='use dropout for recurrent connections with the given factor')
-    parser.add-argument('--trg-char-embeddings-dropout', type=float, default=0.0,
+    parser.add_argument('--trg-char-embeddings-dropout', type=float, default=0.0,
             metavar='FRACTION',
             help='use dropout for target character embeddings '
                  'with the given factor')
