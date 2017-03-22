@@ -159,7 +159,8 @@ class NMT(Model):
         self.add(Embeddings(
             'trg_char_embeddings',
             len(config['trg_char_encoder']),
-            config['src_char_embedding_dims']))  # FIXME separate?
+            config['src_char_embedding_dims']),  # FIXME separate?
+            dropout=config['trg_char_embeddings_dropout'])
 
         self.add(Linear(
             'hidden',
@@ -808,6 +809,10 @@ def main():
     parser.add_argument('--recurrent-dropout', type=float, default=0.0,
             metavar='FRACTION',
             help='use dropout for recurrent connections with the given factor')
+    parser.add-argument('--trg-char-embeddings-dropout', type=float, default=0.0,
+            metavar='FRACTION',
+            help='use dropout for target character embeddings '
+                 'with the given factor')
     parser.add_argument('--layer-normalization', action='store_true',
             help='use layer normalization')
     parser.add_argument('--word-embedding-dims', type=int, default=512,
@@ -1109,6 +1114,7 @@ def main():
                 'trg_embedding_dims': trg_embedding_dims,
                 'src_char_embedding_dims': args.char_embedding_dims,
                 'char_embeddings_dropout': args.dropout,
+                'trg_char_embeddings_dropout': args.trg_char_embeddings_dropout,
                 'embeddings_dropout': args.dropout,
                 'recurrent_dropout': args.recurrent_dropout,
                 'dropout': args.dropout,
