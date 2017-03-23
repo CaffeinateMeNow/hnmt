@@ -202,20 +202,6 @@ class NMT(Model):
             dropout=config['dropout'],
             layernorm=config['layernorm']))
 
-        self.add(Linear(
-            'proj_char_h0',
-            config['decoder_state_dims'],
-            config['char_decoder_state_dims'],
-            dropout=config['dropout'],
-            layernorm=config['layernorm']))
-
-        self.add(Linear(
-            'proj_char_c0',
-            config['decoder_state_dims'],
-            config['char_decoder_state_dims'],
-            dropout=config['dropout'],
-            layernorm=config['layernorm']))
-
         # The total loss is
         #   lambda_o*xent(target sentence) + lambda_a*xent(alignment)
         self.lambda_o = theano.shared(
@@ -281,11 +267,11 @@ class NMT(Model):
 
         char_decoder_units = [LSTMUnit(
             'char_decoder',
-            config['src_char_embedding_dims'],  # FIXME: rename?
+            config['src_char_embedding_dims'] + config['decoder_state_dims'],
             config['char_decoder_state_dims'],
             layernorm=config['decoder_layernorm'],
             dropout=config['recurrent_dropout'],
-            trainable_initial=False)]
+            trainable_initial=True)]
         for i in range(config['char_decoder_residual_layers']):
             char_decoder_units.append(
                 ResidualUnit(LSTMUnit(
@@ -324,11 +310,6 @@ class NMT(Model):
 
         self.encode_fun = function(self.x, self.encode(*self.x))
         self.xent_fun = function(self.x+self.y, self.xent(*(self.x+self.y)))
-
-        word_h = T.fmatrix('word_h')
-        word_c = T.fmatrix('word_c')
-        self.proj_char_h0_func = function([word_h], self.proj_char_h0(word_h))
-        self.proj_char_c0_func = function([word_c], self.proj_char_c0(word_c))
 
     def xent(self, inputs, inputs_mask, chars, chars_mask,
              outputs, outputs_mask, out_chars, out_chars_mask, attention):
@@ -468,25 +449,6 @@ class NMT(Model):
                 prune_margin=3.0,
                 keep_unk_states=True)
 
-        def char_step(i, states, outputs, outputs_mask, word_indices):
-            models_out = []
-            models_states = []
-            for (idx, model) in enumerate(models):
-                args = [models_char_embeddings[idx][outputs[-1]],
-                        outputs_mask]
-                # add stored recurrent inputs
-                args.extend(states[idx])
-                # char decoder has no non-sequences
-                final_out, states_out, out_seqs = model.char_decoder.group_outputs(
-                    model.char_decoder.step_fun()(*args))
-                models_out.append(final_out)
-                models_states.append(states_out)
-
-            models_predict = np.array(
-                    [models[idx].char_predict_fun(models_out[idx])
-                     for idx in range(n_models)])
-            dist = models_predict.mean(axis=0)
-            return (models_states, dist, None)
 
         # character level decoding
         expanded = []
@@ -500,11 +462,35 @@ class NMT(Model):
                 print(' '.join(self.config['trg_encoder'].decode_sentence(
                     Encoded(word_level_seq, None))))
                 # map from word level decoder states to char level states
-                unks = self.word_to_char_states(hyp.unks, models)
+                unk_hs, unk_inits = self.word_to_char_states(hyp.unks, models)
+
+                def char_step(i, states, outputs, outputs_mask, word_indices):
+                    models_out = []
+                    models_states = []
+                    for (idx, model) in enumerate(models):
+                        emb = models_char_embeddings[idx][outputs[-1]]
+                        #hs = unk_hs[idx][None, ...].repeat(emb.shape[0], axis=0)
+                        hs = unk_hs[idx][word_indices]
+                        args = [np.concatenate((emb, hs), axis=-1),
+                                outputs_mask]
+                        # add stored recurrent inputs
+                        args.extend(states[idx])
+                        # char decoder has no non-sequences
+                        final_out, states_out, out_seqs = model.char_decoder.group_outputs(
+                            model.char_decoder.step_fun()(*args))
+                        models_out.append(final_out)
+                        models_states.append(states_out)
+
+                    models_predict = np.array(
+                            [models[idx].char_predict_fun(models_out[idx])
+                            for idx in range(n_models)])
+                    dist = models_predict.mean(axis=0)
+                    return (models_states, dist, None)
+
                 n_unks = len(hyp.unks)
                 char_level = beam_with_coverage(
                         char_step,
-                        unks,
+                        unk_inits,
                         n_unks,
                         self.config['trg_char_encoder']['<S>'],
                         self.config['trg_char_encoder']['</S>'],
@@ -551,6 +537,7 @@ class NMT(Model):
 
         n_words = len(hyp_unks)
         # hyp_unks: nested 3d-list (word, model, state)
+        hs = []
         char_inits = []
         # transpose to (model, word, state)
         hyp_unks = zip(*hyp_unks)
@@ -559,14 +546,12 @@ class NMT(Model):
             model_states = tuple(zip(*model_states))
             # stack the words into a minibatch
             h = np.array(model_states[0])
-            c = np.array(model_states[1])
+            hs.append(h)
             # map to char level
-            char_h_0 = model.proj_char_h0_func(h)
-            char_c_0 = model.proj_char_c0_func(c)
+            # FIXME proj_char was here
             char_inits.append(model.char_decoder.make_inits(
-                (char_h_0, char_c_0), n_words,
-                include_nones=False, do_eval=True))
-        return char_inits
+                [], n_words, include_nones=False, do_eval=True))
+        return hs, char_inits
 
     def encode(self, inputs, inputs_mask, chars, chars_mask):
         # First run a bidirectional LSTM encoder over the unknown word
@@ -650,13 +635,13 @@ class NMT(Model):
 
         # char level decoder
         embedded_char_outputs = self.trg_char_embeddings(out_chars)
-        char_h_0 = self.proj_char_h0(
-            h_seq[charlevel_indices[1] - 1, charlevel_indices[0], :])
-        char_c_0 = self.proj_char_c0(
-            c_seq[charlevel_indices[1] - 1, charlevel_indices[0], :])
+        # FIXME proj_char was here
+        char_contexts = h_seq[charlevel_indices[1] - 1, charlevel_indices[0], :]
+        char_contexts = char_contexts.dimshuffle('x', 0, 1).repeat(out_chars.shape[0], axis=0)
+        char_concat = T.concatenate([embedded_char_outputs, char_contexts],
+                                    axis=-1)
         char_h_seq, char_states, char_outputs = self.char_decoder(
-                embedded_char_outputs, out_chars_mask,
-                [char_h_0, char_c_0])
+                char_concat, out_chars_mask)
         char_pred_seq = softmax_3d(self.char_emission(
             T.tanh(self.char_hidden(char_h_seq))))
 
