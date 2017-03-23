@@ -159,8 +159,8 @@ class NMT(Model):
         self.add(Embeddings(
             'trg_char_embeddings',
             len(config['trg_char_encoder']),
-            config['src_char_embedding_dims']),  # FIXME separate?
-            dropout=config['trg_char_embeddings_dropout'])
+            config['src_char_embedding_dims'],  # FIXME separate?
+            dropout=config['trg_char_embeddings_dropout']))
 
         self.add(Linear(
             'hidden',
