@@ -242,7 +242,7 @@ class NMT(Model):
                 encoder_units,
                 backwards=False, offset=0))
 
-        decoder_units = [LSTMUnit(
+        decoder_units = [SeparatePathLSTMUnit(
             'decoder_attention',
             config['trg_embedding_dims'],
             config['decoder_state_dims'],
@@ -410,6 +410,7 @@ class NMT(Model):
             models_out = []
             models_states = []
             models_att = []
+            models_unk = []
             for (idx, model) in enumerate(models):
                 args = [models_embeddings[idx][outputs[-1]],
                         outputs_mask]
@@ -423,6 +424,7 @@ class NMT(Model):
                 models_out.append(final_out)
                 models_states.append(states_out)
                 models_att.append(out_seqs[0])
+                models_unk.append(out_seqs[1])
 
             mean_attention = np.array(
                     [models_att[idx] for idx in range(n_models)]
@@ -431,7 +433,7 @@ class NMT(Model):
                     [models[idx].predict_fun(models_out[idx])
                      for idx in range(n_models)])
             dist = models_predict.mean(axis=0)
-            return (models_states, dist, mean_attention)
+            return (models_states, dist, mean_attention, models_unk)
 
         word_level = beam_with_coverage(
                 step,
@@ -530,22 +532,15 @@ class NMT(Model):
 
     def word_to_char_states(self, hyp_unks, models):
         """map from word level decoder states to char level states"""
-        # this method assumes that the word level decoder has
-        # a single layer (indices 0 and 1 are the relevant hidden states)
-        # and that the char level decoder only has
-        # a single layer with non-trainable inits
-
         n_words = len(hyp_unks)
-        # hyp_unks: nested 3d-list (word, model, state)
+        # hyp_unks: nested 3d-list (word, model)
         hs = []
         char_inits = []
-        # transpose to (model, word, state)
+        # transpose to (model, word)
         hyp_unks = zip(*hyp_unks)
         for (model, model_states) in zip(models, hyp_unks):
-            # transpose to (state, word)
-            model_states = tuple(zip(*model_states))
             # stack the words into a minibatch
-            h = np.array(model_states[0])
+            h = np.array(model_states)
             hs.append(h)
             # map to char level
             # FIXME proj_char was here
@@ -631,12 +626,13 @@ class NMT(Model):
                 [attended, inputs_mask])
         c_seq = states[self.decoder.final_out_idx + 1]
         attention_seq = deco_outputs[0]
+        h_breve_seq = deco_outputs[1]
         pred_seq = softmax_3d(self.emission(T.tanh(self.hidden(h_seq))))
 
         # char level decoder
         embedded_char_outputs = self.trg_char_embeddings(out_chars)
         # FIXME proj_char was here
-        char_contexts = h_seq[charlevel_indices[1] - 1, charlevel_indices[0], :]
+        char_contexts = h_breve_seq[charlevel_indices[1] - 1, charlevel_indices[0], :]
         char_contexts = char_contexts.dimshuffle('x', 0, 1).repeat(out_chars.shape[0], axis=0)
         char_concat = T.concatenate([embedded_char_outputs, char_contexts],
                                     axis=-1)
