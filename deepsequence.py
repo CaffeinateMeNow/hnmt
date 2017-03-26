@@ -310,7 +310,6 @@ class SeparatePathLSTMUnit(Unit):
                  w=None, w_init=None, w_regularizer=None,
                  u=None, u_init=None, u_regularizer=None,
                  b=None, b_init=None, b_regularizer=None,
-                 w_breve=None, w_breve_init=None, w_breve_regularizer=None,
                  attention_dims=None, attended_dims=None,
                  layernorm=False,
                  dropout=0, trainable_initial=False):
@@ -332,14 +331,14 @@ class SeparatePathLSTMUnit(Unit):
         if w_init is None: w_init = init.Gaussian(fan_in=input_dims)
 
         if u_init is None: u_init = init.Concatenated(
-            [init.Orthogonal()]*4, axis=1)
+            [init.Orthogonal()]*5, axis=1)
 
         if b_init is None: b_init = init.Concatenated(
-            [init.Constant(x) for x in [0.0, 1.0, 0.0, 0.0]])
+            [init.Constant(x) for x in [0.0, 1.0, 0.0, 0.0, 0.0]])
 
-        self.param('w', (input_dims, state_dims*4), init_f=w_init, value=w)
-        self.param('u', (state_dims, state_dims*4), init_f=u_init, value=u)
-        self.param('b', (state_dims*4,), init_f=b_init, value=b)
+        self.param('w', (input_dims, state_dims*5), init_f=w_init, value=w)
+        self.param('u', (state_dims, state_dims*5), init_f=u_init, value=u)
+        self.param('b', (state_dims*5,), init_f=b_init, value=b)
 
         if self.use_attention:
             self.add(Linear('attention_u', attended_dims, attention_dims))
@@ -356,8 +355,8 @@ class SeparatePathLSTMUnit(Unit):
         self.regularize(self._b, b_regularizer)
 
         if layernorm == 'ba1':
-            self.add(LayerNormalization('ln_1', (None, state_dims*4)))
-            self.add(LayerNormalization('ln_2', (None, state_dims*4)))
+            self.add(LayerNormalization('ln_1', (None, state_dims*5)))
+            self.add(LayerNormalization('ln_2', (None, state_dims*5)))
         if layernorm:
             self.add(LayerNormalization('ln_h', (None, state_dims)))
 
@@ -385,9 +384,6 @@ class SeparatePathLSTMUnit(Unit):
             self.add_non_sequence(T.matrix('attention_mask'))
 
         # separate path for connecting to character-level decoder
-        self.param('w_breve', (input_dims, state_dims*4),
-                   init_f=w_breve_init, value=w_breve)
-        self.regularize(self._w_breve, w_breve_regularizer)
         self.add_recurrence(T.matrix('h_breve'),
                             init=OutputOnly)
 
@@ -426,9 +422,10 @@ class SeparatePathLSTMUnit(Unit):
         f = T.nnet.sigmoid(x_part(1))
         o = T.nnet.sigmoid(x_part(2))
         c = T.tanh(        x_part(3))
+        h_breve = T.tanh(  x_part(4))
         c_t = f*c_tm1 + i*c
         h_t = o*T.tanh(self.ln_h(c_t) if self.layernorm else c_t)
         if self.use_attention:
-            return h_t, c_t, attention.T
+            return h_t, c_t, attention.T, h_breve
         else:
-            return h_t, c_t
+            return h_t, c_t, h_breve
