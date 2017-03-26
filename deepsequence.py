@@ -310,6 +310,7 @@ class SeparatePathLSTMUnit(Unit):
                  w=None, w_init=None, w_regularizer=None,
                  u=None, u_init=None, u_regularizer=None,
                  b=None, b_init=None, b_regularizer=None,
+                 w_breve=None, w_breve_init=None, w_breve_regularizer=None,
                  attention_dims=None, attended_dims=None,
                  layernorm=False,
                  dropout=0, trainable_initial=False):
@@ -382,6 +383,13 @@ class SeparatePathLSTMUnit(Unit):
             self.add_non_sequence(T.tensor3('attended_dot_u'),
                 func=self.attention_u, idx=0)
             self.add_non_sequence(T.matrix('attention_mask'))
+
+        # separate path for connecting to character-level decoder
+        self.param('w_breve', (input_dims, state_dims*4),
+                   init_f=w_breve_init, value=w_breve)
+        self.regularize(self._w_breve, w_breve_regularizer)
+        self.add_recurrence(T.matrix('h_breve'),
+                            init=OutputOnly)
 
     def step(self, inputs, unit_recs, unit_nonseqs):
         h_tm1, c_tm1 = unit_recs
