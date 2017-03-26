@@ -238,6 +238,8 @@ class DeepSequence(Model):
 
     @property
     def final_out_idx(self):
+        """Index (into ungrouped output of scan) of the final output.
+        NB: DON'T use this to index into grouped output."""
         return -self.units[-1].n_rec
 
     @property
