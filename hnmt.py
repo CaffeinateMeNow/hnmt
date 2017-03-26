@@ -624,7 +624,9 @@ class NMT(Model):
                 embedded_outputs, outputs_mask,
                 [h_0, c_0],
                 [attended, inputs_mask])
-        c_seq = states[self.decoder.final_out_idx + 1]
+        # assumes that the (last layer of the) word-level decoder
+        # is a normal LSTM with 2 recurrent states (h, c)
+        # c_seq = states[-1]    # no longer used
         attention_seq = deco_outputs[0]
         h_breve_seq = deco_outputs[1]
         pred_seq = softmax_3d(self.emission(T.tanh(self.hidden(h_seq))))
