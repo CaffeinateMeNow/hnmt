@@ -83,7 +83,7 @@ def beam_with_coverage(
                   for y in zip(*states)]
 
         # predict
-        all_states, all_dists, attention, unk = step(
+        all_states, all_dists, attention, all_unks = step(
             i, states, prev_syms, mask, sent_indices)
         if i <= min_length:
             all_dists[:, stop_symbol] = 1e-30
@@ -126,7 +126,7 @@ def beam_with_coverage(
                     norm_score = (score / lp) + cp
                 new_states = [[s[j, :] for s in ms] for ms in all_states]
                 if keep_unk_states and symbol == unk_symbol:
-                    unks = hyp.unks + (unk[j, :],)
+                    unks = hyp.unks + (tuple(unk[j, :] for unk in all_unks),)
                 else:
                     unks = hyp.unks
                 extended.append(

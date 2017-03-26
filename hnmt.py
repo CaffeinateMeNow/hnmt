@@ -487,7 +487,7 @@ class NMT(Model):
                             [models[idx].char_predict_fun(models_out[idx])
                             for idx in range(n_models)])
                     dist = models_predict.mean(axis=0)
-                    return (models_states, dist, None)
+                    return (models_states, dist, None, None)
 
                 n_unks = len(hyp.unks)
                 char_level = beam_with_coverage(
