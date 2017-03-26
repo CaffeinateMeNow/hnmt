@@ -8,7 +8,7 @@ import theano
 from theano import tensor as T
 
 from bnas import init
-from bnas.model import Model, LSTM
+from bnas.model import *
 from bnas.fun import function
 from bnas.utils import expand_to_batch
 
