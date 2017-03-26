@@ -303,3 +303,124 @@ class ResidualUnit(Unit):
     @property
     def non_sequences(self):
         return self.wrapped.non_sequences
+
+
+class SeparatePathLSTMUnit(Unit):
+    def __init__(self, name, input_dims, state_dims,
+                 w=None, w_init=None, w_regularizer=None,
+                 u=None, u_init=None, u_regularizer=None,
+                 b=None, b_init=None, b_regularizer=None,
+                 attention_dims=None, attended_dims=None,
+                 layernorm=False,
+                 dropout=0, trainable_initial=False):
+        super().__init__(name)
+
+        assert layernorm in (False, 'ba1', 'ba2')
+        assert (attention_dims is None) == (attended_dims is None)
+
+        if attended_dims is not None:
+            input_dims += attended_dims
+
+        self.input_dims = input_dims
+        self.state_dims = state_dims
+        self.layernorm = layernorm
+        self.attention_dims = attention_dims
+        self.attended_dims = attended_dims
+        self.use_attention = attention_dims is not None
+
+        if w_init is None: w_init = init.Gaussian(fan_in=input_dims)
+
+        if u_init is None: u_init = init.Concatenated(
+            [init.Orthogonal()]*4, axis=1)
+
+        if b_init is None: b_init = init.Concatenated(
+            [init.Constant(x) for x in [0.0, 1.0, 0.0, 0.0]])
+
+        self.param('w', (input_dims, state_dims*4), init_f=w_init, value=w)
+        self.param('u', (state_dims, state_dims*4), init_f=u_init, value=u)
+        self.param('b', (state_dims*4,), init_f=b_init, value=b)
+
+        if self.use_attention:
+            self.add(Linear('attention_u', attended_dims, attention_dims))
+            self.param('attention_w', (state_dims, attention_dims),
+                       init_f=init.Gaussian(fan_in=state_dims))
+            self.param('attention_v', (attention_dims,),
+                       init_f=init.Gaussian(fan_in=attention_dims))
+            self.regularize(self._attention_w, w_regularizer)
+            if layernorm == 'ba1':
+                self.add(LayerNormalization('ln_a', (None, attention_dims)))
+
+        self.regularize(self._w, w_regularizer)
+        self.regularize(self._u, u_regularizer)
+        self.regularize(self._b, b_regularizer)
+
+        if layernorm == 'ba1':
+            self.add(LayerNormalization('ln_1', (None, state_dims*4)))
+            self.add(LayerNormalization('ln_2', (None, state_dims*4)))
+        if layernorm:
+            self.add(LayerNormalization('ln_h', (None, state_dims)))
+
+        if trainable_initial:
+            self.param('h_0', (self.state_dims,),
+                       init_f=init.Gaussian(fan_in=self.state_dims))
+            self.param('c_0', (self.state_dims,),
+                       init_f=init.Gaussian(fan_in=self.state_dims))
+            h_0 = self._h_0
+            c_0 = self._c_0
+        else:
+            h_0 = None
+            c_0 = None
+        self.add_recurrence(T.matrix('h_tm1'), init=h_0, dropout=dropout)
+        self.add_recurrence(T.matrix('c_tm1'), init=c_0, dropout=0)
+        if self.use_attention:
+            # attention output
+            self.add_recurrence(
+                T.matrix('attention'), init=OutputOnly, dropout=0)
+
+            self.add_non_sequence(T.tensor3('attended'))
+            # precomputed from attended
+            self.add_non_sequence(T.tensor3('attended_dot_u'),
+                func=self.attention_u, idx=0)
+            self.add_non_sequence(T.matrix('attention_mask'))
+
+    def step(self, inputs, unit_recs, unit_nonseqs):
+        h_tm1, c_tm1 = unit_recs
+        if self.use_attention:
+            attended, attended_dot_u, attention_mask = unit_nonseqs
+            # Non-precomputed part of the attention vector for this time step
+            #   _ x batch_size x attention_dims
+            h_dot_w = T.dot(h_tm1, self._attention_w)
+            if self.layernorm == 'ba1': h_dot_w = self.ln_a(h_dot_w)
+            h_dot_w = h_dot_w.dimshuffle('x',0,1)
+            # Attention vector, with distributions over the positions in
+            # attended. Elements that fall outside the sentence in each batch
+            # are set to zero.
+            #   sequence_length x batch_size
+            # Note that attention.T is returned
+            attention = softmax_masked(
+                    T.dot(
+                        T.tanh(attended_dot_u + h_dot_w),
+                        self._attention_v).T,
+                    attention_mask.T).T
+            # Compressed attended vector, weighted by the attention vector
+            #   batch_size x attended_dims
+            compressed = (attended * attention.dimshuffle(0,1,'x')).sum(axis=0)
+            # Append the compressed vector to the inputs and continue as usual
+            inputs = T.concatenate([inputs, compressed], axis=1)
+        if self.layernorm == 'ba1':
+            x = (self.ln_1(T.dot(inputs, self._w)) +
+                 self.ln_2(T.dot(h_tm1, self._u)))
+        else:
+            x = T.dot(inputs, self._w) + T.dot(h_tm1, self._u)
+        x = x + self._b.dimshuffle('x', 0)
+        def x_part(i): return x[:, i*self.state_dims:(i+1)*self.state_dims]
+        i = T.nnet.sigmoid(x_part(0))
+        f = T.nnet.sigmoid(x_part(1))
+        o = T.nnet.sigmoid(x_part(2))
+        c = T.tanh(        x_part(3))
+        c_t = f*c_tm1 + i*c
+        h_t = o*T.tanh(self.ln_h(c_t) if self.layernorm else c_t)
+        if self.use_attention:
+            return h_t, c_t, attention.T
+        else:
+            return h_t, c_t
