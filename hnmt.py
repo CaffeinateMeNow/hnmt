@@ -452,7 +452,6 @@ class NMT(Model):
                 embedded_outputs, outputs_mask,
                 [h_0, c_0],
                 [attended, inputs_mask])
-        c_seq = states[self.decoder.final_out_idx + 1]
         attention_seq = outputs[0]
         pred_seq = softmax_3d(self.emission(T.tanh(self.hidden(h_seq))))
 
