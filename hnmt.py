@@ -375,11 +375,12 @@ class NMT(Model):
     def search(self, inputs, inputs_mask, chars, chars_mask,
                max_length, beam_size=8,
                alpha=0.2, beta=0.2, len_smooth=5.0, others=[],
-               expand_n=1):
+               expand_n=None, char_cost_weight=1.0):
         # list of models in the ensemble
         models = [self] + others
         n_models = len(models)
         batch_size = inputs.shape[1]
+        expand_n = expand_n if expand_n is not None else beam_size
 
         # OBS: this assumes that inits for residual layers are trainable
         # (encode_fun only returns one pair of h_0, c_0)
@@ -453,70 +454,80 @@ class NMT(Model):
 
 
         # character level decoding
-        expanded = []
+        all_expanded = []
         for (_, beam) in word_level:
-            expanded_sent = []
-            for i in range(expand_n):
-                hyp = next(beam)
-                word_level_seq = hyp.history + (hyp.last_sym,)
-                # FIXME debug
-                print('output of word level decoder:')
-                print(' '.join(self.config['trg_encoder'].decode_sentence(
-                    Encoded(word_level_seq, None))))
-                # map from word level decoder states to char level states
-                unk_hs, unk_inits = self.word_to_char_states(hyp.unks, models)
+            expanded_hyps = []
+            try:
+                for i in range(expand_n):
+                    hyp = next(beam)
+                    score = hyp.norm_score
+                    word_level_seq = hyp.history + (hyp.last_sym,)
+                    # FIXME debug
+                    print('output of word level decoder:')
+                    print(' '.join(self.config['trg_encoder'].decode_sentence(
+                        Encoded(word_level_seq, None))))
+                    # map from word level decoder states to char level states
+                    unk_hs, unk_inits = self.word_to_char_states(hyp.unks, models)
 
-                def char_step(i, states, outputs, outputs_mask, word_indices):
-                    models_out = []
-                    models_states = []
-                    for (idx, model) in enumerate(models):
-                        emb = models_char_embeddings[idx][outputs[-1]]
-                        #hs = unk_hs[idx][None, ...].repeat(emb.shape[0], axis=0)
-                        hs = unk_hs[idx][word_indices]
-                        args = [np.concatenate((emb, hs), axis=-1),
-                                outputs_mask]
-                        # add stored recurrent inputs
-                        args.extend(states[idx])
-                        # char decoder has no non-sequences
-                        final_out, states_out, out_seqs = model.char_decoder.group_outputs(
-                            model.char_decoder.step_fun()(*args))
-                        models_out.append(final_out)
-                        models_states.append(states_out)
+                    def char_step(i, states, outputs, outputs_mask, word_indices):
+                        models_out = []
+                        models_states = []
+                        for (idx, model) in enumerate(models):
+                            emb = models_char_embeddings[idx][outputs[-1]]
+                            #hs = unk_hs[idx][None, ...].repeat(emb.shape[0], axis=0)
+                            hs = unk_hs[idx][word_indices]
+                            args = [np.concatenate((emb, hs), axis=-1),
+                                    outputs_mask]
+                            # add stored recurrent inputs
+                            args.extend(states[idx])
+                            # char decoder has no non-sequences
+                            final_out, states_out, out_seqs = model.char_decoder.group_outputs(
+                                model.char_decoder.step_fun()(*args))
+                            models_out.append(final_out)
+                            models_states.append(states_out)
 
-                    models_predict = np.array(
-                            [models[idx].char_predict_fun(models_out[idx])
-                            for idx in range(n_models)])
-                    dist = models_predict.mean(axis=0)
-                    return (models_states, dist, None, None)
+                        models_predict = np.array(
+                                [models[idx].char_predict_fun(models_out[idx])
+                                for idx in range(n_models)])
+                        dist = models_predict.mean(axis=0)
+                        return (models_states, dist, None, None)
 
-                n_unks = len(hyp.unks)
-                char_level = beam_with_coverage(
-                        char_step,
-                        unk_inits,
-                        n_unks,
-                        self.config['trg_char_encoder']['<S>'],
-                        self.config['trg_char_encoder']['</S>'],
-                        None,
-                        self.config['max_word_length'],
-                        None,
-                        beam_size=beam_size,
-                        alpha=0,
-                        beta=0,
-                        len_smooth=len_smooth,
-                        prune_margin=3.0,
-                        keep_unk_states=False)
-                char_encodings = []
-                for (_, char_beam) in char_level:
-                    char_hyp = next(char_beam)
-                    char_encodings.append(
-                        Encoded(char_hyp.history + (char_hyp.last_sym,),
-                                None))
-                encoded = Encoded(
-                    self.number_unks(word_level_seq, len(char_encodings)),
-                    char_encodings)
-                expanded_sent.append(encoded)
-            expanded.append(expanded_sent)
-        return expanded
+                    n_unks = len(hyp.unks)
+                    char_level = beam_with_coverage(
+                            char_step,
+                            unk_inits,
+                            n_unks,
+                            self.config['trg_char_encoder']['<S>'],
+                            self.config['trg_char_encoder']['</S>'],
+                            None,
+                            self.config['max_word_length'],
+                            None,
+                            beam_size=beam_size,
+                            alpha=0,
+                            beta=0,
+                            len_smooth=len_smooth,
+                            prune_margin=3.0,
+                            keep_unk_states=False)
+                    char_encodings = []
+                    for (_, char_beam) in char_level:
+                        # only the best character-level hypothesis
+                        char_hyp = next(char_beam)
+                        # add weighted cost of each best char-level hyp
+                        score += char_cost_weight * char_hyp.norm_score
+                        char_encodings.append(
+                            Encoded(char_hyp.history + (char_hyp.last_sym,),
+                                    None))
+                    encoded = Encoded(
+                        self.number_unks(word_level_seq, len(char_encodings)),
+                        char_encodings)
+                    expanded_hyps.append((score, encoded))
+                expanded_hyps.sort(key=lambda x: -x[0])
+                # keep hypothesis with best combined score
+                all_expanded.append([x[1] for x in expanded_hyps])
+            except StopIteration:
+                # beam was not at full capacity
+                pass
+        return all_expanded
 
     def number_unks(self, word_level_seq, max_unks):
         numbered = []
@@ -706,6 +717,12 @@ def main():
     parser.add_argument('--beam-size', type=int, default=argparse.SUPPRESS,
             metavar='N',
             help='beam size during translation')
+    parser.add_argument('--hybrid-expand-n', type=int, default=argparse.SUPPRESS,
+            metavar='N',
+            help='expand n-best word level hypotheses to character-level')
+    parser.add_argument('--hybrid-char-cost-weight',
+            type=float, default=argparse.SUPPRESS, metavar='X',
+            help='weight for character-level logprobability')
     parser.add_argument('--alpha', type=float, default=argparse.SUPPRESS,
             metavar='X',
             help='length penalty weight during beam translation')
@@ -870,7 +887,9 @@ def main():
             'beam_size': 8,
             'alpha': 0.2,
             'beta': 0.2,
-            'len_smooth': 5.0,}
+            'len_smooth': 5.0,
+            'hybrid_expand_n': None,
+            'hybrid_char_cost_weight': 1.0}
 
     if args.translate:
         models = []
@@ -895,6 +914,11 @@ def main():
             config['encoder_residual_layers'] = 0
         if 'decoder_residual_layers' not in config:
             config['decoder_residual_layers'] = 0
+        if 'hybrid_expand_n' not in config:
+            config['hybrid_expand_n'] = None
+        if 'hybrid_char_cost_weight' not in config:
+            config['hybrid_char_cost_weight'] = 1.0
+
         for c in configs[1:]:
             assert c['trg_encoder'].vocab == config['trg_encoder'].vocab
         if args.ensemble_average:
@@ -1142,7 +1166,9 @@ def main():
                     alpha=config['alpha'],
                     beta=config['beta'],
                     len_smooth=config['len_smooth'],
-                    others=models[1:])
+                    others=models[1:],
+                    expand_n=config['hybrid_expand_n'],
+                    char_cost_weight=config['hybrid_char_cost_weight'])
             for sentence in sentences:
                 encoded = sentence[0]
                 yield detokenize(
