@@ -10,6 +10,7 @@ import numpy as np
 import theano
 
 Encoded = namedtuple('Encoded', ['sequence', 'unknown'])
+TTEncoded = namedtuple('TTEncoded', ['sequence', 'unknown'])
 
 class TextEncoder(object):
     def __init__(self,
@@ -150,3 +151,16 @@ class TextEncoder(object):
                  for x,b in zip(row,row_mask)
                  if bool(b) and x not in (start, stop)]
                 for row,row_mask in zip(m.T,mask.T)]
+
+    def split_unk_outputs(self, outputs, outputs_mask):
+        # Compute separate mask for character level (UNK) words
+        # (with symbol < 0).
+        charlevel_mask = outputs_mask * T.lt(outputs, 0)
+        charlevel_indices = T.nonzero(charlevel_mask.T)
+        # shortlisted words directly in word level decoder,
+        # but char level replaced with unk
+        unked_outputs = (1 - charlevel_mask) * outputs
+        unked_outputs += charlevel_mask * T.as_tensor(
+            self.index['<UNK>'])
+        return unked_outputs, charlevel_indices
+

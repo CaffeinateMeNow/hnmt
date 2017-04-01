@@ -313,8 +313,9 @@ class NMT(Model):
 
     def xent(self, inputs, inputs_mask, chars, chars_mask,
              outputs, outputs_mask, out_chars, out_chars_mask, attention):
-        unked_outputs, charlevel_indices = self.split_unk_outputs(
-            outputs, outputs_mask)
+        unked_outputs, charlevel_indices = \
+            self.config['trg_encoder'].split_unk_outputs(
+                outputs, outputs_mask)
         pred_outputs, pred_char_outputs, pred_attention = self(
                 inputs, inputs_mask, chars, chars_mask,
                 unked_outputs, charlevel_indices, outputs_mask,
@@ -612,18 +613,6 @@ class NMT(Model):
         # Attention on concatenated forward/backward sequences
         attended = T.concatenate([fwd_h_seq, back_h_seq], axis=-1)
         return h_0, c_0, attended
-
-    def split_unk_outputs(self, outputs, outputs_mask):
-        # Compute separate mask for character level (UNK) words
-        # (with symbol < 0).
-        charlevel_mask = outputs_mask * T.lt(outputs, 0)
-        charlevel_indices = T.nonzero(charlevel_mask.T)
-        # shortlisted words directly in word level decoder,
-        # but char level replaced with unk
-        unked_outputs = (1 - charlevel_mask) * outputs
-        unked_outputs += charlevel_mask * T.as_tensor(
-            self.config['trg_encoder'].index['<UNK>'])
-        return unked_outputs, charlevel_indices
 
     def __call__(self, inputs, inputs_mask, chars, chars_mask,
                  unked_outputs, charlevel_indices,
