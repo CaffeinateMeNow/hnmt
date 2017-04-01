@@ -10,7 +10,7 @@ import numpy as np
 import theano
 
 Encoded = namedtuple('Encoded', ['sequence', 'unknown'])
-TTEncoded = namedtuple('TTEncoded', ['sequence', 'unknown'])
+TTEncoded = namedtuple('TTEncoded', ['sequence', 'unknown', 'extrachars'])
 
 class TextEncoder(object):
     def __init__(self,
@@ -164,3 +164,126 @@ class TextEncoder(object):
             self.index['<UNK>'])
         return unked_outputs, charlevel_indices
 
+
+class TwoThresholdTextEncoder(TextEncoder):
+    def __init__(self,
+                 max_vocab=None,
+                 vocab=None,
+                 sequences=None,
+                 sub_encoder=None,
+                 special=('<S>', '</S>', '<UNK>'),
+                 low_thresh=None):
+        super().__init__(self, max_vocab=max_vocab, vocab=vocab,
+                         sequences=sequences, sub_encoder=sub_encoder,
+                         special=special)
+        self.low_thresh = min(low_thresh, len(self))
+        assert self.sub_encoder is not None
+
+    def __str__(self):
+        return 'TwoThresholdTextEncoder(%d, %d, %s)' % (
+            self.low_thresh, len(self), str(self.sub_encoder))
+
+    def encode_sequence(self, sequence, max_length=None, dtype=np.int32):
+        """
+        returns:
+            an Encoded namedtuple, with the following fields:
+            sequence --
+                numpy array of symbol indices.
+                Negative values index into the unknowns list,
+                while positive values index into the encoder lexicon.
+            unknowns --
+                list of unknown tokens as Encoded(seq, None) tuples,
+                or None if no subencoder.
+            extrachars --
+                numpy array of symbol indices.
+                Negative values index into the unknowns list,
+                while positive values index into the encoder lexicon,
+                truncated to the lower threshold.
+                Contains additional negative indices, compared to 'sequence'
+        """
+        start = (self.index['<S>'],) if '<S>' in self.index else ()
+        stop = (self.index['</S>'],) if '</S>' in self.index else ()
+        unk = self.index.get('<UNK>')
+        unknowns = []
+        def encode_item(x):
+            idx = self.index.get(x)
+            if idx is None and idx < self.low_thresh:
+                low_idx = idx
+            else:
+                low_idx = None
+            if low_idx is None:
+                encoded_unk = self.sub_encoder.encode_sequence(x)
+                unknowns.append(encoded_unk)
+                low_idx = -len(unknowns)
+                if idx is None:
+                    idx = low_idx
+            return idx, low_idx
+        encoded = []
+        low_encoded = []
+        for item in sequence:
+            idx, low_idx = encode_item(item)
+            encoded.append(idx)
+            low_encoded.append(low_idx)
+        encoded = tuple(encoded)
+        low_encoded = tuple(low_encoded)
+        if max_length is None \
+        or len(encoded)+len(start)+len(stop) <= max_length:
+            out = start + encoded + stop
+            low_out = start + low_encoded + stop
+        else:
+            out = start + encoded[:max_length-(len(start)+len(stop))] + stop
+            low_out = start + low_encoded[:max_length-(len(start)+len(stop))] + stop
+        return TTEncoded(np.asarray(out, dtype=dtype), unknowns, low_out)
+
+    def pad_sequences(self, encoded_sequences,
+                      max_length=None, pad_right=True, include_extra=True,
+                      dtype=np.int32):
+        """
+        arguments:
+            encoded_sequences -- a list of
+                TTEncoded(encoded, unknowns, extrachars) tuples.
+        """
+        if not encoded_sequences:
+            # An empty matrix would mess up things, so create a dummy 1x1
+            # matrix with an empty mask in case the sequence list is empty.
+            m = np.zeros((1 if max_length is None else max_length, 1),
+                         dtype=dtype)
+            mask = np.zeros_like(m, dtype=np.bool)
+            return m, mask
+
+        length = max((len(x[0]) for x in encoded_sequences))
+        length = length if max_length is None else min(length, max_length)
+
+        m = np.zeros((length, len(encoded_sequences)), dtype=dtype)
+        mask = np.zeros_like(m, dtype=np.bool)
+
+        all_unknowns = []
+        for i,pair in enumerate(encoded_sequences):
+            encoded, unknowns = pair
+            if unknowns is not None:
+                unk_offset = len(all_unknowns)
+                encoded = [idx - unk_offset if idx < 0 else idx
+                           for idx in encoded]
+                all_unknowns.extend(unknowns)
+
+            if pad_right:
+                m[:len(encoded),i] = encoded
+                mask[:len(encoded),i] = 1
+            else:
+                m[-len(encoded):,i] = encoded
+                mask[-len(encoded):,i] = 1
+
+        char, char_mask = self.sub_encoder.pad_sequences(all_unknowns)
+        return m, mask, char, char_mask
+
+    def split_unk_outputs(self, outputs, outputs_mask):
+        # Compute separate mask for character level (UNK) words
+        # (with symbol < 0).
+        charlevel_mask = outputs_mask * T.lt(outputs, 0)
+        charlevel_indices = T.nonzero(charlevel_mask.T)
+        # shortlisted words directly in word level decoder,
+        # but char level replaced with unk
+        unked_outputs = (1 - charlevel_mask) * outputs
+        unked_outputs += charlevel_mask * T.as_tensor(
+            self.index['<UNK>'])
+        return unked_outputs, charlevel_indices
