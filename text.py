@@ -8,6 +8,7 @@ from collections import Counter, namedtuple
 
 import numpy as np
 import theano
+from theano import tensor as T
 
 Encoded = namedtuple('Encoded', ['sequence', 'unknown'])
 
@@ -172,10 +173,10 @@ class TwoThresholdTextEncoder(TextEncoder):
                  sub_encoder=None,
                  special=('<S>', '</S>', '<UNK>'),
                  low_thresh=None):
-        super().__init__(self, max_vocab=max_vocab, vocab=vocab,
+        super().__init__(max_vocab=max_vocab, vocab=vocab,
                          sequences=sequences, sub_encoder=sub_encoder,
                          special=special)
-        self.low_thresh = min(low_thresh, len(self))
+        self.low_thresh = min(low_thresh + len(special), len(self))
         assert self.sub_encoder is not None
 
     def __str__(self):
@@ -200,7 +201,7 @@ class TwoThresholdTextEncoder(TextEncoder):
         unknowns = []
         def encode_item(x):
             idx = self.index.get(x)
-            if idx is None and idx <= self.low_thresh:
+            if idx is not None and idx <= self.low_thresh:
                 low_idx = idx
             else:
                 low_idx = None
@@ -226,7 +227,7 @@ class TwoThresholdTextEncoder(TextEncoder):
         charlevel_mask = outputs_mask * T.lt(outputs, 0)
         # lower threshold used for indexing tensor for charlevel
         lthr = T.as_tensor(self.low_thresh)
-        low_charlevel_mask = charlevel_mask * T.gt(outputs, lthr)
+        low_charlevel_mask = charlevel_mask + (outputs_mask * T.gt(outputs, lthr))
         low_charlevel_indices = T.nonzero(low_charlevel_mask.T)
         # higher threshold used for
         # shortlisted words directly in word level decoder,

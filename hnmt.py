@@ -15,7 +15,7 @@ from theano import tensor as T
 
 # encoding in advance
 # FIXME: either merge this into bnas, fork bnas, or make hnmt a proper package
-from text import TextEncoder, Encoded
+from text import TextEncoder, Encoded, TwoThresholdTextEncoder
 from search import beam_with_coverage
 from deepsequence import *
 
@@ -788,6 +788,10 @@ def main():
     parser.add_argument('--target-vocabulary', type=int, default=10000,
             metavar='N',
             help='maximum size of target word-level vocabulary')
+    parser.add_argument('--hybrid-extra-char-threshold', type=int, default=5000,
+            metavar='N',
+            help='train character-level decoder with all except this number of'
+            'most frequent words')
     parser.add_argument('--min-char-count', type=int,
             metavar='N',
             help='drop all characters with count < N in training data')
@@ -1085,10 +1089,10 @@ def main():
             trg_char_encoder = TextEncoder(
                     sequences=[token for sent in trg_sents for token in sent],
                     min_count=args.min_char_count)
-            trg_encoder = TextEncoder(
+            trg_encoder = TwoThresholdTextEncoder(
                     sequences=trg_sents,
                     max_vocab=args.target_vocabulary,
-                    min_count=None,
+                    low_thresh=args.hybrid_extra_char_threshold,
                     sub_encoder=trg_char_encoder,
                     special=(('<S>', '</S>')
                              if config['target_tokenizer'] == 'char'
