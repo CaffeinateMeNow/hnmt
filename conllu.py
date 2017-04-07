@@ -20,6 +20,8 @@ MiniBatch = namedtuple('MiniBatch',
 # FIXME: more options: is_compound? 
 Conllu = namedtuple('Conllu',
     ['surface', 'lemma', 'upos', 'morph', 'head', 'deplbl'])
+Aux = namedtuple('Conllu',
+    ['surface', 'logf', 'lemma', 'upos', 'morph', 'head', 'deplbl'])
         
 def conllu_helper(split):
     surface = []
@@ -56,6 +58,31 @@ def read_conllu(lines):
             # comments start with hash
             continue
         raw.append(line.split('\t'))
+
+def pad_aux(encoded_sequences, length,
+            pad_right=True, dtype=np.int32):
+    """
+    arguments:
+        encoded_sequences -- a list of Aux tuples
+    """
+    if not encoded_sequences:
+        # An empty matrix would mess up things, so create a dummy 1x1
+        # matrix with an empty mask in case the sequence list is empty.
+        m = np.zeros((1 if max_length is None else max_length, 1),
+                        dtype=dtype)
+        return m
+
+    out = Aux(*[
+        np.zeros((length, len(encoded_sequences)), dtype=dtype)
+        for _ in encoded_sequences._fields])
+
+    for i,tpl in enumerate(encoded_sequences):
+        for j,field in enumerate(tpl):
+            if pad_right:
+                out[j][:len(encoded),i] = encoded
+            else:
+                out[j]m[-len(encoded):,i] = encoded
+    return out
 
 
 class LogFreqEncoder(object):

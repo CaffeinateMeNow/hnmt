@@ -1245,16 +1245,12 @@ def main():
             src_batch, trg_batch, links_maps_batch = \
                     list(zip(*batch_pairs))
             x = config['src_encoder'].pad_sequences(src_batch)
-            y = config['trg_encoder'].pad_sequences(trg_batch)
-            logf = config['logf_encoder'].pad_sequences(fields.lemma)
-            lemma = config['lemma_encoder'].pad_sequences(fields.lemma)
-            upos = config['upos_encoder'].pad_sequences(fields.upos)
-            morph = config['morph_encoder'].pad_sequences(fields.morph)
-            head = config['head_encoder'].pad_sequences(fields.head)
-            deplbl = config['dep_encoder'].pad_sequences(fields.deplbl)
-            # FIXME: wasteful to build all these masks
-            aux = tuple(x[0] for x in (logf, lemma, upos, morph, head, deplbl)
+            y = config['trg_encoder'].pad_sequences(
+                [x.surface for x in trg_batch])
+            length = y[0].shape[0]
+            aux = pad_aux(trg_batch, length)
             if args.alignment_loss:
+                # FIXME: remove this?
                 links_batch, src_maps_batch, trg_maps_batch = \
                         list(zip(*links_maps_batch))
                 y = y + (pad_links(
@@ -1262,18 +1258,25 @@ def main():
             else:
                 y = y + (np.ones(y[0].shape + (x[0].shape[0],),
                                     dtype=theano.config.floatX),)
-            return x, y
-            # FIXME copypasta
-            #return MiniBatch(
-            #    x, None,
-            #    aux_token,
-            #    morph, lemmas)
+            return MiniBatch(x, y, aux)
+
+        def encode_conllu(fields):
+            y = config['trg_encoder'].encode_sequence(fields.surface)
+            logf = config['logf_encoder'].encode_sequence(fields.lemma)
+            lemma = config['lemma_encoder'].encode_sequence(fields.lemma)
+            upos = config['upos_encoder'].encode_sequence(fields.upos)
+            morph = config['morph_encoder'].encode_sequence(fields.morph)
+            head = config['head_encoder'].encode_sequence(fields.head)
+            deplbl = config['dep_encoder'].encode_sequence(fields.deplbl)
+            return Aux(y, logf, lemma, upos, morph, head, deplbl)
+
 
         # encoding in advance
         src_sents = [config['src_encoder'].encode_sequence(sent)
                      for sent in src_sents]
-        trg_sents = [config['trg_encoder'].encode_sequence(sent)
-                     for sent in trg_sents]
+        #trg_sents = [config['trg_encoder'].encode_sequence(sent)
+        #             for sent in trg_sents]
+        trg_sents = [encode_conllu(sent) for sent in trg_conllu]
 
         # reseparating "test" set from train set
         test_src = src_sents[:n_test_sents]
