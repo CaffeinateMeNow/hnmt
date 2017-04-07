@@ -1316,7 +1316,7 @@ def main():
             t0 = time()
             for batch_pairs in iterate_batches(
                     test_pairs, config['batch_size']):
-                test_x, test_y = prepare_batch(batch_pairs)
+                test_x, test_y, _ = prepare_batch(batch_pairs)
                 (test_outputs, test_outputs_mask,
                  test_char_outputs, test_char_mask,
                  test_attention) = test_y
@@ -1355,7 +1355,7 @@ def main():
 
                 sent_nr += len(batch_pairs)
 
-                x, y = prepare_batch(batch_pairs)
+                x, y, aux = prepare_batch(batch_pairs)
 
                 # This code can be used to print parameter and gradient
                 # statistics after each update, which can be useful to
@@ -1366,7 +1366,7 @@ def main():
                 #print('-'*72, flush=True)
 
                 t0 = time()
-                train_loss = optimizer.step(*(x + y))
+                train_loss = optimizer.step(*(x + y + aux))
                 train_loss *= (y[0].shape[1] / (y[1].sum()*np.log(2)))
                 print('Batch %d:%d of shape %s has loss %.3f (%.2f s)' % (
                     epoch+1, optimizer.n_updates,
@@ -1389,6 +1389,7 @@ def main():
 
                 if batch_nr % config['translate_every'] == 0:
                     t0 = time()
+                    # FIXME: separate monitor function that also does aux
                     test_dec = translate(translate_src, encode=False)
                     for src, trg, trg_dec in zip(
                             translate_src, translate_trg, test_dec):
