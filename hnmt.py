@@ -966,38 +966,45 @@ def main():
             test_src_sents = read_sents(
                     config['test_source'], config['source_tokenizer'],
                     config['source_lowercase'] == 'yes')
-            test_trg_sents = read_sents(
-                    config['test_target'], config['target_tokenizer'],
-                    config['target_lowercase'] == 'yes')
-            assert len(test_src_sents) == len(test_trg_sents)
+            #test_trg_sents = read_sents(
+            #        config['test_target'], config['target_tokenizer'],
+            #        config['target_lowercase'] == 'yes')
+            test_trg_conllu = read_conllu(read_sents(
+                    config['test_target'], 'char', False))
+            #assert len(test_src_sents) == len(test_trg_sents)
+            assert len(test_src_sents) == len(test_trg_conllu)
         else:
             test_src_sents = []
             test_trg_sents = []
+            test_trg_conllu = []
 
         print('reading sentences...', file=sys.stderr, flush=True)
         src_sents = read_sents(
                 config['source'], config['source_tokenizer'],
                 config['source_lowercase'] == 'yes')
-        trg_sents = read_sents(
-                config['target'], config['target_tokenizer'],
-                config['target_lowercase'] == 'yes')
+        #trg_sents = read_sents(
+        #        config['target'], config['target_tokenizer'],
+        #        config['target_lowercase'] == 'yes')
+        trg_conllu = read_conllu(read_sents(
+                config['target'], 'char', False))
         print('...done', file=sys.stderr, flush=True)
-        assert len(src_sents) == len(trg_sents)
+        #assert len(src_sents) == len(trg_sents)
+        assert len(src_sents) == len(trg_conllu)
 
-        # FIXME: length check needs to be modified for multitask
         max_source_length = config['max_source_length']
         max_target_length = config['max_target_length']
         # FIXME: filter out sentences with words exceeding max_word_length
 
         def accept_pair(pair):
-            src_len, trg_len = list(map(len, pair))
+            src_len = len(pair[0])
+            trg_len = len(pair[1].surface)
             if not src_len or not trg_len: return False
             if max_source_length and src_len > max_source_length: return False
             if max_target_length and trg_len > max_target_length: return False
             return True
 
         test_keep_sents = [i for i,pair
-                           in enumerate(zip(test_src_sents, test_trg_sents))
+                           in enumerate(zip(test_src_sents, test_trg_conllu))
                            if accept_pair(pair)]
         test_src_sents = [test_src_sents[i] for i in test_keep_sents]
         test_trg_sents = [test_trg_sents[i] for i in test_keep_sents]
@@ -1006,19 +1013,22 @@ def main():
             # if no test set is given, take one minibatch from train
             n_test_sents = config['batch_size']
 
-        keep_sents = [i for i,pair in enumerate(zip(src_sents, trg_sents))
+        keep_sents = [i for i,pair in enumerate(zip(src_sents, trg_conllu))
                       if accept_pair(pair)]
         random.shuffle(keep_sents)
         # test set is prepended to shuffled test set,
         # because the following code is built around the assumption
         # of a single data set
         src_sents = test_src_sents + [src_sents[i] for i in keep_sents]
-        trg_sents = test_trg_sents + [trg_sents[i] for i in keep_sents]
+        #trg_sents = test_trg_sents + [trg_sents[i] for i in keep_sents]
+        trg_conllu = test_trg_conllu + [trg_conllu[i] for i in keep_conllu]
 
         if not max_source_length:
             config['max_source_length'] = max(map(len, src_sents))
+        #if not max_target_length:
+        #    config['max_target_length'] = max(map(len, trg_sents))
         if not max_target_length:
-            config['max_target_length'] = max(map(len, trg_sents))
+            config['max_target_length'] = max(len(x.surface) for x in trg_conllu)
 
         if args.alignment_loss:
             # Take a sentence segmented according to tokenizer
@@ -1088,10 +1098,10 @@ def main():
                     max_vocab=args.source_vocabulary,
                     sub_encoder=src_char_encoder)
             trg_char_encoder = TextEncoder(
-                    sequences=[token for sent in trg_sents for token in sent],
+                    sequences=[token for sent in trg_conllu for token in sent.surface],
                     min_count=args.min_char_count)
             trg_encoder = TwoThresholdTextEncoder(
-                    sequences=trg_sents,
+                    sequences=[sent.surface for sent in trg_conllu],
                     max_vocab=args.target_vocabulary,
                     low_thresh=args.hybrid_extra_char_threshold,
                     sub_encoder=trg_char_encoder,
@@ -1099,13 +1109,16 @@ def main():
                              if config['target_tokenizer'] == 'char'
                              else ('<S>', '</S>', '<UNK>')))
             # FIXME: copypasta
-            logf_endcoder = LogFreqEncoder(sequences=[aux.lemmas for aux in aux_sents])
-            morph_encoder = TextEncoder(sequences=[aux.morphs for aux in aux_sents])
+            logf_endcoder = LogFreqEncoder(sequences=[aux.lemma for aux in trg_conllu])
+            lemma_encoder = TextEncoder(
+                sequences=[aux.lemma for aux in trg_conllu],
+                max_vocab=config['lemma_vocab_size'])
+            upos_encoder = TextEncoder(sequences=[aux.upos for aux in trg_conllu])
+            morph_encoder = TextEncoder(sequences=[aux.morph for aux in trg_conllu])
             head_encoder = TextEncoder(
-                    sequences=[aux.heads for aux in aux_sents],
-                    max_vocab=config['head_vocab_size'])
-            dep_encoder = TextEncoder(sequences=[aux.deplbl for aux in aux_sents])
-            # FIXME: add to config
+                    sequences=[aux.head for aux in trg_conllu],
+                    max_vocab=config['lemma_vocab_size'])
+            dep_encoder = TextEncoder(sequences=[aux.deplbl for aux in trg_conllu])
             print('...done', file=sys.stderr, flush=True)
 
             if not args.target_embedding_dims is None:
@@ -1119,6 +1132,12 @@ def main():
                 'src_encoder': src_encoder,
                 'trg_encoder': trg_encoder,
                 'trg_char_encoder': trg_char_encoder,
+                'logf_endcoder': logf_endcoder,
+                'lemma_encoder': lemma_encoder,
+                'upos_encoder': upos_encoder,
+                'morph_encoder': morph_encoder,
+                'head_encoder': head_encoder,
+                'dep_encoder': dep_encoder,
                 'src_embedding_dims': args.word_embedding_dims,
                 'trg_embedding_dims': trg_embedding_dims,
                 'src_char_embedding_dims': args.char_embedding_dims,
@@ -1177,6 +1196,8 @@ def main():
                     config['trg_encoder'].decode_sentence(encoded),
                     config['target_tokenizer'])
 
+    # FIXME: separate monitor function that also does aux
+
     # Create padded 3D tensors for supervising attention, given word
     # alignments.
     def pad_links(links_batch, x, y, src_maps, trg_maps):
@@ -1225,14 +1246,14 @@ def main():
                     list(zip(*batch_pairs))
             x = config['src_encoder'].pad_sequences(src_batch)
             y = config['trg_encoder'].pad_sequences(trg_batch)
-            lemmas = config['char_encoder'].pad_sequences(fields.lemmas)
-            logf = config['logf_encoder'].pad_sequences(fields.lemmas)
-            pos = config['morph_encoder'].pad_sequences(fields.upos)
-            morph = config['morph_encoder'].pad_sequences(fields.morphs)
-            heads = config['head_encoder'].pad_sequences(fields.heads)
+            logf = config['logf_encoder'].pad_sequences(fields.lemma)
+            lemma = config['lemma_encoder'].pad_sequences(fields.lemma)
+            upos = config['upos_encoder'].pad_sequences(fields.upos)
+            morph = config['morph_encoder'].pad_sequences(fields.morph)
+            head = config['head_encoder'].pad_sequences(fields.head)
             deplbl = config['dep_encoder'].pad_sequences(fields.deplbl)
-            # taking mask from logf (FIXME: use surf instead)
-            aux_token_level = [logf[1], logf[0], pos[0], heads[0], deplbl[0]]
+            # FIXME: wasteful to build all these masks
+            aux = tuple(x[0] for x in (logf, lemma, upos, morph, head, deplbl)
             if args.alignment_loss:
                 links_batch, src_maps_batch, trg_maps_batch = \
                         list(zip(*links_maps_batch))

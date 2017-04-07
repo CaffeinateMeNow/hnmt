@@ -4,12 +4,12 @@ The :class:`TextEncoder` class is the main feature of this module, the helper
 functions were used in earlier examples and should be phased out.
 """
 
-from collections import Counter
+from collections import Counter, namedtuple
 
 import numpy as np
 import theano
 
-MiniBatch = collections.namedtuple('MiniBatch',
+MiniBatch = namedtuple('MiniBatch',
     ['src',             # (tokens, mask, chars, charmask)
      'tgt',             # (tokens, mask, chars, charmask)
      'aux',             # (aux0, aux1, ...) or None
@@ -18,7 +18,7 @@ MiniBatch = collections.namedtuple('MiniBatch',
 # FIXME: split morph tags into multiple fields? lang-specific
 #   Finnish: Number, Case, Person, Mood, Tense, Misc=(Card/Ord/Post/Prep/Foreign/Abbr/AbbrNum)
 # FIXME: more options: is_compound? 
-Conllu = collections.namedtuple('Conllu',
+Conllu = namedtuple('Conllu',
     ['surface', 'lemma', 'upos', 'morph', 'head', 'deplbl'])
         
 def conllu_helper(split):
@@ -43,9 +43,9 @@ def conllu_helper(split):
     deplbl = columns[7]
     return Conllu(surface, lemmas, upos, morphs, heads, deplbl)
             
-def read_conllu(fname):
+def read_conllu(lines):
     raw = []    
-    for line in read_sents(fname):
+    for line in lines:
         line = line.strip()
         if len(line) == 0:
             # empty lines indicate sentence breaks
