@@ -1,0 +1,127 @@
+"""Text processing.
+
+The :class:`TextEncoder` class is the main feature of this module, the helper
+functions were used in earlier examples and should be phased out.
+"""
+
+from collections import Counter
+
+import numpy as np
+import theano
+
+MiniBatch = collections.namedtuple('MiniBatch',
+    ['src',             # (chars, mask, lang)
+     'trans_tgt',       # (chars, mask, lang) or None
+     'aux_token',       # (mask, aux0, aux1, ...) or None
+     'aux_morph',       # (morphs, mask) or None
+     'aux_lemma',       # (chars, mask) or None
+    ])
+Conllu = collections.namedtuple('Conllu',
+    ['joined', 'lemmas', 'upos', 'morphs', 'heads', 'deplbl'])
+    # string   string    seq     seq       seq      seq
+    # ?        ?         token   ?         token    token   # len
+        
+def conllu_helper(split):
+    joined = []
+    for line in split:
+        joined.append(line[1])
+        if 'SpaceAfter=No' not in line[-1]:
+            joined.append(' ')
+    joined = ''.join(joined).strip()
+    columns = list(zip(*split))
+    lemmas = ' '.join(columns[2])
+    upos = columns[3]
+    morphs = ['{} {}'.format(pos, feats.replace('|', ' '))
+              for (pos, feats) in zip(columns[3], columns[5])]
+    morphs = ' '.join(morphs)
+    heads = []           
+    for i in columns[6]:
+        i = int(i) 
+        if i > 0:
+            # lemma at i (CoNLL-U uses 1-based indexing)
+            head = columns[2][i-1]
+            # only last part of compound
+            head = head.split('#')[-1]
+            heads.append(head)
+        else:
+            heads.append('#root')
+    deplbl = columns[7]
+    return Conllu(joined, lemmas, upos, morphs, heads, deplbl)
+            
+def read_conllu(fname):
+    raw = []    
+    for line in read_sents(fname):
+        line = line.strip()
+        if len(line) == 0:
+            # empty lines indicate sentence breaks
+            yield conllu_helper(raw)
+            raw = []
+            continue
+        if line[0] == '#':
+            # comments start with hash
+            continue
+        raw.append(line.split('\t'))
+
+
+class LogFreqEncoder(object):
+    def __init__(self,
+                 vocab=None,
+                 sequences=None,
+                 use_boundaries=True):
+        self.use_boundaries = use_boundaries
+
+        if vocab is not None:
+            self.vocab = vocab
+        else:
+            if sequences is not None:
+                self.vocab = Counter(x for xs in sequences for x in xs)
+
+    def __str__(self):
+        return 'LogFreqEncoder(%d)' % len(self)
+
+    def __repr__(self):
+        return str(self)
+
+    def __getitem__(self, x):
+        return int(np.log(self.vocab[token] + 1))
+
+    def __len__(self):
+        return len(self.vocab)
+
+    def encode_sequence(self, sequence, max_length=None, unknowns=None):
+        start = (0,) if self.use_boundaries else ()
+        stop = (0,) if self.use_boundaries else ()
+        encoded = tuple(self[symbol] for symbol in sequence)
+        if max_length is None \
+        or len(encoded)+len(start)+len(stop) <= max_length:
+            return start + encoded + stop
+        else:
+            return start + encoded[:max_length-(len(start)+len(stop))] + stop
+
+    def pad_sequences(self, sequences,
+                      max_length=None, pad_right=True, dtype=np.int32):
+        if not sequences:
+            # An empty matrix would mess up things, so create a dummy 1x1
+            # matrix with an empty mask in case the sequence list is empty.
+            m = np.zeros((1 if max_length is None else max_length, 1),
+                         dtype=dtype)
+            mask = np.zeros_like(m, dtype=np.bool)
+            return m, mask
+        encoded_sequences = [
+                self.encode_sequence(sequence, max_length)
+                for sequence in sequences]
+        length = max(map(len, encoded_sequences))
+        length = length if max_length is None else min(length, max_length)
+
+        m = np.zeros((length, len(sequences)), dtype=dtype)
+        mask = np.zeros_like(m, dtype=np.bool)
+
+        for i,encoded in enumerate(encoded_sequences):
+            if pad_right:
+                m[:len(encoded),i] = encoded
+                mask[:len(encoded),i] = 1
+            else:
+                m[-len(encoded):,i] = encoded
+                mask[-len(encoded):,i] = 1
+
+        return m, mask

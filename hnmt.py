@@ -984,6 +984,7 @@ def main():
         print('...done', file=sys.stderr, flush=True)
         assert len(src_sents) == len(trg_sents)
 
+        # FIXME: length check needs to be modified for multitask
         max_source_length = config['max_source_length']
         max_target_length = config['max_target_length']
         # FIXME: filter out sentences with words exceeding max_word_length
@@ -1097,6 +1098,14 @@ def main():
                     special=(('<S>', '</S>')
                              if config['target_tokenizer'] == 'char'
                              else ('<S>', '</S>', '<UNK>')))
+            # FIXME: copypasta
+            logf_endcoder = LogFreqEncoder(sequences=[aux.lemmas for aux in aux_sents])
+            morph_encoder = TextEncoder(sequences=[aux.morphs for aux in aux_sents])
+            head_encoder = TextEncoder(
+                    sequences=[aux.heads for aux in aux_sents],
+                    max_vocab=config['head_vocab_size'])
+            dep_encoder = TextEncoder(sequences=[aux.deplbl for aux in aux_sents])
+            # FIXME: add to config
             print('...done', file=sys.stderr, flush=True)
 
             if not args.target_embedding_dims is None:
@@ -1216,6 +1225,14 @@ def main():
                     list(zip(*batch_pairs))
             x = config['src_encoder'].pad_sequences(src_batch)
             y = config['trg_encoder'].pad_sequences(trg_batch)
+            lemmas = config['char_encoder'].pad_sequences(fields.lemmas)
+            logf = config['logf_encoder'].pad_sequences(fields.lemmas)
+            pos = config['morph_encoder'].pad_sequences(fields.upos)
+            morph = config['morph_encoder'].pad_sequences(fields.morphs)
+            heads = config['head_encoder'].pad_sequences(fields.heads)
+            deplbl = config['dep_encoder'].pad_sequences(fields.deplbl)
+            # taking mask from logf (FIXME: use surf instead)
+            aux_token_level = [logf[1], logf[0], pos[0], heads[0], deplbl[0]]
             if args.alignment_loss:
                 links_batch, src_maps_batch, trg_maps_batch = \
                         list(zip(*links_maps_batch))
@@ -1225,6 +1242,11 @@ def main():
                 y = y + (np.ones(y[0].shape + (x[0].shape[0],),
                                     dtype=theano.config.floatX),)
             return x, y
+            # FIXME copypasta
+            #return MiniBatch(
+            #    x, None,
+            #    aux_token,
+            #    morph, lemmas)
 
         # encoding in advance
         src_sents = [config['src_encoder'].encode_sequence(sent)
