@@ -10,30 +10,25 @@ import numpy as np
 import theano
 
 MiniBatch = collections.namedtuple('MiniBatch',
-    ['src',             # (chars, mask, lang)
-     'trans_tgt',       # (chars, mask, lang) or None
-     'aux_token',       # (mask, aux0, aux1, ...) or None
-     'aux_morph',       # (morphs, mask) or None
-     'aux_lemma',       # (chars, mask) or None
+    ['src',             # (tokens, mask, chars, charmask)
+     'tgt',             # (tokens, mask, chars, charmask)
+     'aux',             # (aux0, aux1, ...) or None
     ])
+# each of the fields contains a sequence with one element per token
+# FIXME: split morph tags into multiple fields? lang-specific
+#   Finnish: Number, Case, Person, Mood, Tense, Misc=(Card/Ord/Post/Prep/Foreign/Abbr/AbbrNum)
+# FIXME: more options: is_compound? 
 Conllu = collections.namedtuple('Conllu',
-    ['joined', 'lemmas', 'upos', 'morphs', 'heads', 'deplbl'])
-    # string   string    seq     seq       seq      seq
-    # ?        ?         token   ?         token    token   # len
+    ['surface', 'lemma', 'upos', 'morph', 'head', 'deplbl'])
         
 def conllu_helper(split):
-    joined = []
+    surface = []
     for line in split:
-        joined.append(line[1])
-        if 'SpaceAfter=No' not in line[-1]:
-            joined.append(' ')
-    joined = ''.join(joined).strip()
+        surface.append(line[1])
     columns = list(zip(*split))
-    lemmas = ' '.join(columns[2])
+    lemmas = columns[2]
     upos = columns[3]
-    morphs = ['{} {}'.format(pos, feats.replace('|', ' '))
-              for (pos, feats) in zip(columns[3], columns[5])]
-    morphs = ' '.join(morphs)
+    morphs = columns[5]     # as a single, pipe-separated string
     heads = []           
     for i in columns[6]:
         i = int(i) 
@@ -46,7 +41,7 @@ def conllu_helper(split):
         else:
             heads.append('#root')
     deplbl = columns[7]
-    return Conllu(joined, lemmas, upos, morphs, heads, deplbl)
+    return Conllu(surface, lemmas, upos, morphs, heads, deplbl)
             
 def read_conllu(fname):
     raw = []    
