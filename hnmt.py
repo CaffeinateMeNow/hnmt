@@ -1101,7 +1101,7 @@ def main():
 
         def accept_pair(pair):
             src_len = len(pair[0])
-            trg_len = len(pair[1].surface)
+            trg_len = len(pair[1].sequence)
             if not src_len or not trg_len: return False
             if max_source_length and src_len > max_source_length: return False
             if max_target_length and trg_len > max_target_length: return False
@@ -1132,7 +1132,7 @@ def main():
         #if not max_target_length:
         #    config['max_target_length'] = max(map(len, trg_sents))
         if not max_target_length:
-            config['max_target_length'] = max(len(x.surface) for x in trg_conllu)
+            config['max_target_length'] = max(len(x.sequence) for x in trg_conllu)
 
         if args.alignment_loss:
             # FIXME: remove this?
@@ -1166,7 +1166,7 @@ def main():
             # The mapping from translation tokens to alignment tokens is also
             # returned as a list (of the same size as the translation
             # sentence).
-            trg_sents = [x.surface for x in trg_conllu]
+            trg_sents = [x.sequence for x in trg_conllu]
             src_tokens, src_maps = list(zip(*
                 [make_tokens(sent, config['source_tokenizer'])
                  for sent in src_sents]))
@@ -1204,10 +1204,10 @@ def main():
                     max_vocab=args.source_vocabulary,
                     sub_encoder=src_char_encoder)
             trg_char_encoder = TextEncoder(
-                    sequences=[token for sent in trg_conllu for token in sent.surface],
+                    sequences=[token for sent in trg_conllu for token in sent.sequence],
                     min_count=args.min_char_count)
             trg_encoder = TwoThresholdTextEncoder(
-                    sequences=[sent.surface for sent in trg_conllu],
+                    sequences=[sent.sequence for sent in trg_conllu],
                     max_vocab=args.target_vocabulary,
                     low_thresh=args.hybrid_extra_char_threshold,
                     sub_encoder=trg_char_encoder,
@@ -1352,7 +1352,7 @@ def main():
                     list(zip(*batch_pairs))
             x = config['src_encoder'].pad_sequences(src_batch)
             y = config['trg_encoder'].pad_sequences(
-                [x.surface for x in trg_batch])
+                [x.sequence for x in trg_batch])
             length = y[0].shape[0]
             aux = pad_aux(trg_batch, length)
             if args.alignment_loss:
@@ -1367,7 +1367,7 @@ def main():
             return MiniBatch(x, y, aux)
 
         def encode_conllu(fields):
-            y = config['trg_encoder'].encode_sequence(fields.surface)
+            y = config['trg_encoder'].encode_sequence(fields.sequence)
             logf = config['logf_encoder'].encode_sequence(fields.lemma)
             lemma = config['lemma_encoder'].encode_sequence(fields.lemma)
             upos = config['upos_encoder'].encode_sequence(fields.upos)
@@ -1422,12 +1422,13 @@ def main():
             t0 = time()
             for batch_pairs in iterate_batches(
                     test_pairs, config['batch_size']):
-                test_x, test_y, _ = prepare_batch(batch_pairs)
+                test_x, test_y, test_aux = prepare_batch(batch_pairs)
+                test_aux = test_aux[1:]
                 (test_outputs, test_outputs_mask,
                  test_char_outputs, test_char_mask,
                  test_attention) = test_y
                 test_xent, test_xent_attention = model.xent_fun(
-                        *(test_x + test_y))
+                        *(test_x + test_y + test_aux))
                 scale = (test_outputs.shape[1] /
                             (test_outputs_mask.sum()*np.log(2)))
                 result += test_xent * scale
@@ -1462,6 +1463,7 @@ def main():
                 sent_nr += len(batch_pairs)
 
                 x, y, aux = prepare_batch(batch_pairs)
+                aux = aux[1:]
 
                 # This code can be used to print parameter and gradient
                 # statistics after each update, which can be useful to
@@ -1504,7 +1506,7 @@ def main():
                             config['src_encoder'].decode_sentence(src),
                             config['source_tokenizer']))
                         print(detokenize(
-                            config['trg_encoder'].decode_sentence(trg),
+                            config['trg_encoder'].decode_sentence(trg.sequence),
                             config['target_tokenizer']))
                         print(trg_dec)
                         print('-'*72)

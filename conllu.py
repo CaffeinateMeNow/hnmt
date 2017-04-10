@@ -5,6 +5,7 @@ functions were used in earlier examples and should be phased out.
 """
 
 from collections import Counter, namedtuple
+from text import Encoded
 
 import numpy as np
 import theano
@@ -15,19 +16,18 @@ MiniBatch = namedtuple('MiniBatch',
      'aux',             # (aux0, aux1, ...) or None
     ])
 # each of the fields contains a sequence with one element per token
+# the main 'sequence' is the sequence form
 # FIXME: split morph tags into multiple fields? lang-specific
 #   Finnish: Number, Case, Person, Mood, Tense, Misc=(Card/Ord/Post/Prep/Foreign/Abbr/AbbrNum)
 # FIXME: more options: is_compound? 
 Conllu = namedtuple('Conllu',
-    ['surface', 'lemma', 'upos', 'morph', 'head', 'deplbl'])
-Aux = namedtuple('Conllu',
-    ['surface', 'logf', 'lemma', 'upos', 'morph', 'head', 'deplbl'])
+    ['sequence', 'lemma', 'upos', 'morph', 'head', 'deplbl'])
+Aux = namedtuple('Aux',
+    ['sequence', 'logf', 'lemma', 'upos', 'morph', 'head', 'deplbl'])
         
 def conllu_helper(split):
-    surface = []
-    for line in split:
-        surface.append(line[1])
     columns = list(zip(*split))
+    sequence = columns[1]
     lemmas = columns[2]
     upos = columns[3]
     morphs = columns[5]     # as a single, pipe-separated string
@@ -43,7 +43,7 @@ def conllu_helper(split):
         else:
             heads.append('<ROOT>')
     deplbl = columns[7]
-    return Conllu(surface, lemmas, upos, morphs, heads, deplbl)
+    return Conllu(sequence, lemmas, upos, morphs, heads, deplbl)
             
 def read_conllu(lines):
     raw = []    
@@ -65,18 +65,19 @@ def pad_aux(encoded_sequences, length,
     arguments:
         encoded_sequences -- a list of Aux tuples
     """
+    n_batch = max(1, len(encoded_sequences))
+    out = Aux(*[
+        np.zeros((length, n_batch), dtype=dtype)
+        for _ in Aux._fields])
+
     if not encoded_sequences:
         # An empty matrix would mess up things, so create a dummy 1x1
         # matrix with an empty mask in case the sequence list is empty.
-        m = np.zeros((length, 1), dtype=dtype)
-        return m
-
-    out = Aux(*[
-        np.zeros((length, len(encoded_sequences)), dtype=dtype)
-        for _ in encoded_sequences._fields])
+        return out
 
     for i,tpl in enumerate(encoded_sequences):
         for j,encoded in enumerate(tpl):
+            encoded = encoded.sequence      # throw away empty unknowns
             if pad_right:
                 out[j][:len(encoded),i] = encoded
             else:
@@ -111,15 +112,16 @@ class LogFreqEncoder(object):
     def __len__(self):
         return self.max_val + 1
 
-    def encode_sequence(self, sequence, max_length=None, unknowns=None):
+    def encode_sequence(self, sequence, max_length=None, dtype=np.int32):
         start = (0,) if self.use_boundaries else ()
         stop = (0,) if self.use_boundaries else ()
         encoded = tuple(self[symbol] for symbol in sequence)
         if max_length is None \
         or len(encoded)+len(start)+len(stop) <= max_length:
-            return start + encoded + stop
+            out = start + encoded + stop
         else:
-            return start + encoded[:max_length-(len(start)+len(stop))] + stop
+            out = start + encoded[:max_length-(len(start)+len(stop))] + stop
+        return Encoded(np.asarray(out, dtype=dtype), None)
 
     def pad_sequences(self, sequences,
                       max_length=None, pad_right=True, dtype=np.int32):
