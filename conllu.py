@@ -41,7 +41,7 @@ def conllu_helper(split):
             head = head.split('#')[-1]
             heads.append(head)
         else:
-            heads.append('#root')
+            heads.append('<ROOT>')
     deplbl = columns[7]
     return Conllu(surface, lemmas, upos, morphs, heads, deplbl)
             

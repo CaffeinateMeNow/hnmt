@@ -202,6 +202,44 @@ class NMT(Model):
             dropout=config['dropout'],
             layernorm=config['layernorm']))
 
+        # logf, lemma, upos, morph, head, deplbl
+        self.add(Linear(
+            'aux_hidden',
+            2 * config['decoder_state_dims'],
+            config['aux_dims'],
+            dropout=config['dropout'],
+            layernorm=config['layernorm']))
+
+        self.add(Linear(
+            'logf_emission',
+            config['aux_dims'],
+            len(config['logf_encoder'])))
+
+        self.add(Linear(
+            'lemma_emission',
+            config['aux_dims'],
+            len(config['lemma_encoder'])))
+
+        self.add(Linear(
+            'upos_emission',
+            config['aux_dims'],
+            len(config['upos_encoder'])))
+
+        self.add(Linear(
+            'morph_emission',
+            config['aux_dims'],
+            len(config['morph_encoder'])))
+
+        self.add(Linear(
+            'head_emission',
+            config['aux_dims'],
+            len(config['head_encoder'])))
+
+        self.add(Linear(
+            'deplbl_emission',
+            config['aux_dims'],
+            len(config['deplbl_encoder'])))
+
         # The total loss is
         #   lambda_o*xent(target sentence) + lambda_a*xent(alignment)
         self.lambda_o = theano.shared(
@@ -305,18 +343,32 @@ class NMT(Model):
         out_chars_mask = T.bmatrix('out_chars_mask')
         attention = T.tensor3('attention')
 
+        logf = T.lmatrix('logf')
+        lemma = T.lmatrix('lemma')
+        upos = T.lmatrix('upos')
+        morph = T.lmatrix('morph')
+        head = T.lmatrix('head')
+        deplbl = T.lmatrix('deplbl')
+
         self.x = [inputs, inputs_mask, chars, chars_mask]
         self.y = [outputs, outputs_mask, out_chars, out_chars_mask, attention]
+        self.aux = [logf, lemma, upos, morph, head, deplbl]
 
         self.encode_fun = function(self.x, self.encode(*self.x))
-        self.xent_fun = function(self.x+self.y, self.xent(*(self.x+self.y)))
+        self.xent_fun = function(
+            self.x + self.y + self.aux,
+            self.xent(*(self.x + self.y + self.aux)))
 
     def xent(self, inputs, inputs_mask, chars, chars_mask,
-             outputs, outputs_mask, out_chars, out_chars_mask, attention):
+             outputs, outputs_mask, out_chars, out_chars_mask, attention,
+             logf, lemma, upos, morph, head, deplbl):
         unked_outputs, charlevel_indices = \
             self.config['trg_encoder'].split_unk_outputs(
                 outputs, outputs_mask)
-        pred_outputs, pred_char_outputs, pred_attention = self(
+        (pred_outputs, pred_char_outputs, pred_attention, 
+         pred_logf, pred_lemma, pred_upos, pred_morph,
+         pred_head, pred_deplbl) = \
+            self.predict_aux(
                 inputs, inputs_mask, chars, chars_mask,
                 unked_outputs, charlevel_indices, outputs_mask,
                 out_chars, out_chars_mask)
@@ -324,6 +376,21 @@ class NMT(Model):
                 pred_outputs, unked_outputs[1:], outputs_mask[1:])
         char_outputs_xent = batch_sequence_crossentropy(
                 pred_char_outputs, out_chars[1:], out_chars_mask[1:])
+        # aux costs
+        aux_xent = batch_sequence_crossentropy(
+            pred_logf, logf[1:], outputs_mask[1:])
+        aux_xent += batch_sequence_crossentropy(
+            pred_lemma, lemma[1:], outputs_mask[1:])
+        aux_xent += batch_sequence_crossentropy(
+            pred_upos, upos[1:], outputs_mask[1:])
+        aux_xent += batch_sequence_crossentropy(
+            pred_morph, morph[1:], outputs_mask[1:])
+        aux_xent += batch_sequence_crossentropy(
+            pred_head, head[1:], outputs_mask[1:])
+        aux_xent += batch_sequence_crossentropy(
+            pred_deplbl, deplbl[1:], outputs_mask[1:])
+        aux_xent *= config['aux_weight']
+        aux_xent = theano.printing.Print('aux_xent')(aux_xent)
         # Note that pred_attention will contain zero elements for masked-out
         # character positions, to avoid trouble with log() we add 1 for zero
         # element of attention (which after multiplication will be removed
@@ -337,7 +404,7 @@ class NMT(Model):
                    -attention[1:]
                  * T.log(epsilon + pred_attention + (1-attention_mask))
                  * attention_mask).sum() / batch_size
-        return outputs_xent + char_outputs_xent, attention_xent
+        return outputs_xent + char_outputs_xent + aux_xent, attention_xent
 
     def loss(self, *args):
         outputs_xent, attention_xent = self.xent(*args)
@@ -555,7 +622,6 @@ class NMT(Model):
             h = np.array(model_states)
             hs.append(h)
             # map to char level
-            # FIXME proj_char was here
             char_inits.append(model.char_decoder.make_inits(
                 [], n_words, include_nones=False, do_eval=True))
         return hs, char_inits
@@ -617,6 +683,16 @@ class NMT(Model):
     def __call__(self, inputs, inputs_mask, chars, chars_mask,
                  unked_outputs, charlevel_indices,
                  outputs_mask, out_chars, out_chars_mask):
+        pred = self.predict_aux(inputs, inputs_mask, chars, chars_mask,
+                                unked_outputs, charlevel_indices,
+                                outputs_mask, out_chars, out_chars_mask,
+                                do_aux=False)
+        pred_seq, char_pred_seq, attention_seq = pred[0:3]
+        return pred_seq, char_pred_seq, attention_seq
+
+    def predict_aux(self, inputs, inputs_mask, chars, chars_mask,
+                    unked_outputs, charlevel_indices, outputs_mask,
+                    out_chars, out_chars_mask, do_aux=True):
         embedded_outputs = self.trg_embeddings(unked_outputs)
         h_0, c_0, attended = self.encode(
                 inputs, inputs_mask, chars, chars_mask)
@@ -633,7 +709,6 @@ class NMT(Model):
 
         # char level decoder
         embedded_char_outputs = self.trg_char_embeddings(out_chars)
-        # FIXME proj_char was here
         char_contexts = h_breve_seq[charlevel_indices[1] - 1, charlevel_indices[0], :]
         char_contexts = char_contexts.dimshuffle('x', 0, 1).repeat(out_chars.shape[0], axis=0)
         char_concat = T.concatenate([embedded_char_outputs, char_contexts],
@@ -643,13 +718,28 @@ class NMT(Model):
         char_pred_seq = softmax_3d(self.char_emission(
             T.tanh(self.char_hidden(char_h_seq))))
 
-        return pred_seq, char_pred_seq, attention_seq
+        if do_aux:
+            # aux predictions from combination of word level state and char level init
+            state_concat = T.concatenate([h_seq, h_breve_seq], axis=-1)
+            pred_logf   = softmax_3d(self.logf_emission(  T.tanh(self.aux_hidden(h_seq))))
+            pred_lemma  = softmax_3d(self.lemma_emission( T.tanh(self.aux_hidden(h_seq))))
+            pred_upos   = softmax_3d(self.upos_emission(  T.tanh(self.aux_hidden(h_seq))))
+            pred_morph  = softmax_3d(self.morph_emission( T.tanh(self.aux_hidden(h_seq))))
+            pred_head   = softmax_3d(self.head_emission(  T.tanh(self.aux_hidden(h_seq))))
+            pred_deplbl = softmax_3d(self.deplbl_emission(T.tanh(self.aux_hidden(h_seq))))
+        else:
+            (pred_logf, pred_lemma, pred_upos, pred_morph,
+             pred_head, pred_deplbl) = (None,) * 6
+
+        return (pred_seq, char_pred_seq, attention_seq,
+                pred_logf, pred_lemma, pred_upos, pred_morph,
+                pred_head, pred_deplbl)
 
     def create_optimizer(self):
         return Adam(
                 self.parameters(),
-                self.loss(*(self.x + self.y)),
-                self.x, self.y,
+                self.loss(*(self.x + self.y + self.aux)),
+                self.x, self.y + self.aux,
                 grad_max_norm=5.0)
 
     def average_parameters(self, others):
@@ -854,6 +944,15 @@ def main():
     parser.add_argument('--random-seed', type=int, default=123,
             metavar='N',
             help='random seed for repeatable sorting of data')
+    parser.add_argument('--aux-weight', type=float, default=None,
+            metavar='X',
+            help='weight of aux loss')
+    parser.add_argument('--aux-dims', type=int, default=512,
+            metavar='N',
+            help='size of aux state')
+    parser.add_argument('--lemma-vocabulary', type=int, default=1024,
+            metavar='N',
+            help='size of lemma vocabulary for aux task')
 
     args = parser.parse_args()
     args_vars = vars(args)
@@ -882,7 +981,8 @@ def main():
             'beta': 0.2,
             'len_smooth': 5.0,
             'hybrid_expand_n': None,
-            'hybrid_char_cost_weight': 1.0}
+            'hybrid_char_cost_weight': 1.0,
+            'aux_weight': 0.1}
 
     if args.translate:
         models = []
@@ -1108,16 +1208,15 @@ def main():
                     special=(('<S>', '</S>')
                              if config['target_tokenizer'] == 'char'
                              else ('<S>', '</S>', '<UNK>')))
-            # FIXME: copypasta
             logf_endcoder = LogFreqEncoder(sequences=[aux.lemma for aux in trg_conllu])
             lemma_encoder = TextEncoder(
                 sequences=[aux.lemma for aux in trg_conllu],
-                max_vocab=config['lemma_vocab_size'])
+                max_vocab=args.lemma_vocabulary)
             upos_encoder = TextEncoder(sequences=[aux.upos for aux in trg_conllu])
             morph_encoder = TextEncoder(sequences=[aux.morph for aux in trg_conllu])
             head_encoder = TextEncoder(
                     sequences=[aux.head for aux in trg_conllu],
-                    max_vocab=config['lemma_vocab_size'])
+                    max_vocab=args.lemma_vocabulary)
             dep_encoder = TextEncoder(sequences=[aux.deplbl for aux in trg_conllu])
             print('...done', file=sys.stderr, flush=True)
 
@@ -1141,6 +1240,7 @@ def main():
                 'src_embedding_dims': args.word_embedding_dims,
                 'trg_embedding_dims': trg_embedding_dims,
                 'src_char_embedding_dims': args.char_embedding_dims,
+                'aux_dims': args.aux_dims,
                 'char_embeddings_dropout': args.dropout,
                 'trg_char_embeddings_dropout': args.trg_char_embeddings_dropout,
                 'embeddings_dropout': args.dropout,
