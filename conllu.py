@@ -150,3 +150,10 @@ class LogFreqEncoder(object):
                 mask[-len(encoded):,i] = 1
 
         return m, mask
+
+    def decode_sentence(self, encoded):
+        seq = encoded.sequence
+        if self.use_boundaries:
+            seq = seq[1:]
+        return [str(np.exp(x) - 1) for x in seq]
+

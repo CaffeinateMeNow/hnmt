@@ -350,6 +350,7 @@ class NMT(Model):
         morph = T.lmatrix('morph')
         head = T.lmatrix('head')
         deplbl = T.lmatrix('deplbl')
+        aux_in = T.vector('aux_in')     # FIXME: calculations not minibatched!
 
         self.x = [inputs, inputs_mask, chars, chars_mask]
         self.y = [outputs, outputs_mask, out_chars, out_chars_mask, attention]
@@ -359,6 +360,7 @@ class NMT(Model):
         self.xent_fun = function(
             self.x + self.y + self.aux,
             self.xent(*(self.x + self.y + self.aux)))
+        self.aux_fun = function([aux_in], self.aux_step(aux_in))
 
     def xent(self, inputs, inputs_mask, chars, chars_mask,
              outputs, outputs_mask, out_chars, out_chars_mask, attention,
@@ -444,7 +446,7 @@ class NMT(Model):
     def search(self, inputs, inputs_mask, chars, chars_mask,
                max_length, beam_size=8,
                alpha=0.2, beta=0.2, len_smooth=5.0, others=[],
-               expand_n=None, char_cost_weight=1.0):
+               expand_n=None, char_cost_weight=1.0, decode_aux=False):
         # list of models in the ensemble
         models = [self] + others
         n_models = len(models)
@@ -505,6 +507,19 @@ class NMT(Model):
             dist = models_predict.mean(axis=0)
             return (models_states, dist, mean_attention, models_unk)
 
+        if decode_aux:
+            def aux_fun(states, char_states):
+                # only for monitoring: doesn't do ensemble
+                # FIXME: assumes word-decoder is single-layer
+                h = states[0]
+                h_breve = char_states
+                aux_in = np.concatenate([h, h_breve], axis=-1).astype(
+                    dtype=theano.config.floatX)
+                pred = models[0].aux_fun(aux_in)
+                return [np.argmax(x, axis=-1) for x in pred]
+        else:
+            aux_fun = None
+
         word_level = beam_with_coverage(
                 step,
                 models_init,
@@ -519,11 +534,12 @@ class NMT(Model):
                 beta=beta,
                 len_smooth=len_smooth,
                 prune_margin=3.0,
-                keep_unk_states=True)
-
+                keep_unk_states=True,
+                decode_aux=aux_fun)
 
         # character level decoding
         all_expanded = []
+        all_aux = []
         for (_, beam) in word_level:
             expanded_hyps = []
             try:
@@ -589,13 +605,17 @@ class NMT(Model):
                     encoded = Encoded(
                         self.number_unks(word_level_seq, len(char_encodings)),
                         char_encodings)
-                    expanded_hyps.append((score, encoded))
+                    expanded_hyps.append((score, encoded, hyp.aux))
                 expanded_hyps.sort(key=lambda x: -x[0])
                 # keep hypothesis with best combined score
                 all_expanded.append([x[1] for x in expanded_hyps])
+                if decode_aux:
+                    all_aux.append([x[2] for x in expanded_hyps])
             except StopIteration:
                 # beam was not at full capacity
                 pass
+        if decode_aux:
+            return all_expanded, all_aux
         return all_expanded
 
     def number_unks(self, word_level_seq, max_unks):
@@ -738,6 +758,17 @@ class NMT(Model):
         return (pred_seq, char_pred_seq, attention_seq,
                 pred_logf, pred_lemma, pred_upos, pred_morph,
                 pred_head, pred_deplbl)
+
+    def aux_step(self, aux_in):
+        aux_proj = T.tanh(self.aux_hidden(aux_in))
+        # could also have common emission layer and slice before softmax
+        pred_logf   = T.nnet.softmax(self.logf_emission(  aux_proj))
+        pred_lemma  = T.nnet.softmax(self.lemma_emission( aux_proj))
+        pred_upos   = T.nnet.softmax(self.upos_emission(  aux_proj))
+        pred_morph  = T.nnet.softmax(self.morph_emission( aux_proj))
+        pred_head   = T.nnet.softmax(self.head_emission(  aux_proj))
+        pred_deplbl = T.nnet.softmax(self.deplbl_emission(aux_proj))
+        return (pred_logf, pred_lemma, pred_upos, pred_morph, pred_head, pred_deplbl)
 
     def create_optimizer(self):
         return Adam(
@@ -1303,6 +1334,51 @@ def main():
                     config['target_tokenizer'])
 
     # FIXME: separate monitor function that also does aux
+    def monitor(translate_src, translate_trg):
+        for i in range(0, len(translate_src), config['batch_size']):
+            batch_sents = translate_src[i:i+config['batch_size']]
+            x = config['src_encoder'].pad_sequences(batch_sents)
+            sentences, auxes = model.search(
+                    *(x + (config['max_target_length'],)),
+                    beam_size=config['beam_size'],
+                    alpha=config['alpha'],
+                    beta=config['beta'],
+                    len_smooth=config['len_smooth'],
+                    others=models[1:],
+                    expand_n=config['hybrid_expand_n'],
+                    char_cost_weight=config['hybrid_char_cost_weight'],
+                    decode_aux=True)
+            for (src, trg, sentence, aux) in zip(translate_src, translate_trg, sentences, auxes):
+                encoded = sentence[0]
+                aux = aux[0]
+                print('   SOURCE / TARGET / OUTPUT / AUXes')
+                print(detokenize(
+                    config['src_encoder'].decode_sentence(src),
+                    config['source_tokenizer']))
+                print(detokenize(
+                    config['trg_encoder'].decode_sentence(trg.sequence),
+                    config['target_tokenizer']))
+                print(detokenize(
+                    config['trg_encoder'].decode_sentence(encoded),
+                    config['target_tokenizer']))
+                print('aux', len(aux), 'aux[0]', len(aux[0]))
+                logf, lemma, upos, morph, head, deplbl = zip(*aux)
+                print('logf', logf)     # FIXME: this is nested wrong somehow
+                print('lemma', lemma)
+                print(' '.join(
+                    config['logf_encoder'].decode_sentence(Encoded(logf, None))))
+                print(' '.join(
+                    config['lemma_encoder'].decode_sentence(Encoded(lemma, None))))
+                print(' '.join(
+                    config['upos_encoder'].decode_sentence(Encoded(upos, None))))
+                print(' '.join(
+                    config['morph_encoder'].decode_sentence(Encoded(morph, None))))
+                print(' '.join(
+                    config['head_encoder'].decode_sentence(Encoded(head, None))))
+                print(' '.join(
+                    config['deplbl_encoder'].decode_sentence(Encoded(deplbl, None))))
+                print('-'*72)
+        
 
     # Create padded 3D tensors for supervising attention, given word
     # alignments.
@@ -1498,18 +1574,7 @@ def main():
                 if batch_nr % config['translate_every'] == 0:
                     t0 = time()
                     # FIXME: separate monitor function that also does aux
-                    test_dec = translate(translate_src, encode=False)
-                    for src, trg, trg_dec in zip(
-                            translate_src, translate_trg, test_dec):
-                        print('   SOURCE / TARGET / OUTPUT')
-                        print(detokenize(
-                            config['src_encoder'].decode_sentence(src),
-                            config['source_tokenizer']))
-                        print(detokenize(
-                            config['trg_encoder'].decode_sentence(trg.sequence),
-                            config['target_tokenizer']))
-                        print(trg_dec)
-                        print('-'*72)
+                    monitor(translate_src, translate_trg)
                     print('Translation finished: %.2f s' % (time()-t0),
                           flush=True)
 
