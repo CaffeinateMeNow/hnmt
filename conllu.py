@@ -68,8 +68,7 @@ def pad_aux(encoded_sequences, length,
     if not encoded_sequences:
         # An empty matrix would mess up things, so create a dummy 1x1
         # matrix with an empty mask in case the sequence list is empty.
-        m = np.zeros((1 if max_length is None else max_length, 1),
-                        dtype=dtype)
+        m = np.zeros((length, 1), dtype=dtype)
         return m
 
     out = Aux(*[
@@ -77,11 +76,11 @@ def pad_aux(encoded_sequences, length,
         for _ in encoded_sequences._fields])
 
     for i,tpl in enumerate(encoded_sequences):
-        for j,field in enumerate(tpl):
+        for j,encoded in enumerate(tpl):
             if pad_right:
                 out[j][:len(encoded),i] = encoded
             else:
-                out[j]m[-len(encoded):,i] = encoded
+                out[j][-len(encoded):,i] = encoded
     return out
 
 
@@ -97,6 +96,8 @@ class LogFreqEncoder(object):
         else:
             if sequences is not None:
                 self.vocab = Counter(x for xs in sequences for x in xs)
+        mostfreq, _ = self.vocab.most_common(1)[0]
+        self.max_val = self[mostfreq]
 
     def __str__(self):
         return 'LogFreqEncoder(%d)' % len(self)
@@ -104,11 +105,11 @@ class LogFreqEncoder(object):
     def __repr__(self):
         return str(self)
 
-    def __getitem__(self, x):
+    def __getitem__(self, token):
         return int(np.log(self.vocab[token] + 1))
 
     def __len__(self):
-        return len(self.vocab)
+        return self.max_val + 1
 
     def encode_sequence(self, sequence, max_length=None, unknowns=None):
         start = (0,) if self.use_boundaries else ()

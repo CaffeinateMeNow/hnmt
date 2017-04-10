@@ -18,6 +18,7 @@ from theano import tensor as T
 from text import TextEncoder, Encoded, TwoThresholdTextEncoder
 from search import beam_with_coverage
 from deepsequence import *
+from conllu import *
 
 from bnas.model import Model, Linear, Embeddings, LSTMSequence
 from bnas.optimize import Adam, iterate_batches
@@ -389,7 +390,7 @@ class NMT(Model):
             pred_head, head[1:], outputs_mask[1:])
         aux_xent += batch_sequence_crossentropy(
             pred_deplbl, deplbl[1:], outputs_mask[1:])
-        aux_xent *= config['aux_weight']
+        aux_xent *= self.config['aux_cost_weight']
         aux_xent = theano.printing.Print('aux_xent')(aux_xent)
         # Note that pred_attention will contain zero elements for masked-out
         # character positions, to avoid trouble with log() we add 1 for zero
@@ -721,12 +722,15 @@ class NMT(Model):
         if do_aux:
             # aux predictions from combination of word level state and char level init
             state_concat = T.concatenate([h_seq, h_breve_seq], axis=-1)
-            pred_logf   = softmax_3d(self.logf_emission(  T.tanh(self.aux_hidden(h_seq))))
-            pred_lemma  = softmax_3d(self.lemma_emission( T.tanh(self.aux_hidden(h_seq))))
-            pred_upos   = softmax_3d(self.upos_emission(  T.tanh(self.aux_hidden(h_seq))))
-            pred_morph  = softmax_3d(self.morph_emission( T.tanh(self.aux_hidden(h_seq))))
-            pred_head   = softmax_3d(self.head_emission(  T.tanh(self.aux_hidden(h_seq))))
-            pred_deplbl = softmax_3d(self.deplbl_emission(T.tanh(self.aux_hidden(h_seq))))
+            # common FF-layer
+            aux_proj = T.tanh(self.aux_hidden(state_concat))
+            # could also have common emission layer and slice before softmax
+            pred_logf   = softmax_3d(self.logf_emission(  aux_proj))
+            pred_lemma  = softmax_3d(self.lemma_emission( aux_proj))
+            pred_upos   = softmax_3d(self.upos_emission(  aux_proj))
+            pred_morph  = softmax_3d(self.morph_emission( aux_proj))
+            pred_head   = softmax_3d(self.head_emission(  aux_proj))
+            pred_deplbl = softmax_3d(self.deplbl_emission(aux_proj))
         else:
             (pred_logf, pred_lemma, pred_upos, pred_morph,
              pred_head, pred_deplbl) = (None,) * 6
@@ -944,7 +948,7 @@ def main():
     parser.add_argument('--random-seed', type=int, default=123,
             metavar='N',
             help='random seed for repeatable sorting of data')
-    parser.add_argument('--aux-weight', type=float, default=None,
+    parser.add_argument('--aux-cost-weight', type=float, default=argparse.SUPPRESS,
             metavar='X',
             help='weight of aux loss')
     parser.add_argument('--aux-dims', type=int, default=512,
@@ -982,7 +986,7 @@ def main():
             'len_smooth': 5.0,
             'hybrid_expand_n': None,
             'hybrid_char_cost_weight': 1.0,
-            'aux_weight': 0.1}
+            'aux_cost_weight': 0.1}
 
     if args.translate:
         models = []
@@ -1085,8 +1089,8 @@ def main():
         #trg_sents = read_sents(
         #        config['target'], config['target_tokenizer'],
         #        config['target_lowercase'] == 'yes')
-        trg_conllu = read_conllu(read_sents(
-                config['target'], 'char', False))
+        trg_conllu = list(read_conllu(read_sents(
+                config['target'], 'char', False)))
         print('...done', file=sys.stderr, flush=True)
         #assert len(src_sents) == len(trg_sents)
         assert len(src_sents) == len(trg_conllu)
@@ -1121,7 +1125,7 @@ def main():
         # of a single data set
         src_sents = test_src_sents + [src_sents[i] for i in keep_sents]
         #trg_sents = test_trg_sents + [trg_sents[i] for i in keep_sents]
-        trg_conllu = test_trg_conllu + [trg_conllu[i] for i in keep_conllu]
+        trg_conllu = test_trg_conllu + [trg_conllu[i] for i in keep_sents]
 
         if not max_source_length:
             config['max_source_length'] = max(map(len, src_sents))
@@ -1131,6 +1135,7 @@ def main():
             config['max_target_length'] = max(len(x.surface) for x in trg_conllu)
 
         if args.alignment_loss:
+            # FIXME: remove this?
             # Take a sentence segmented according to tokenizer
             # ('char'/'word'/'space'), retokenize it, and return
             # a tuple (tokens, maps) where maps is a list the same length as
@@ -1161,6 +1166,7 @@ def main():
             # The mapping from translation tokens to alignment tokens is also
             # returned as a list (of the same size as the translation
             # sentence).
+            trg_sents = [x.surface for x in trg_conllu]
             src_tokens, src_maps = list(zip(*
                 [make_tokens(sent, config['source_tokenizer'])
                  for sent in src_sents]))
@@ -1208,7 +1214,7 @@ def main():
                     special=(('<S>', '</S>')
                              if config['target_tokenizer'] == 'char'
                              else ('<S>', '</S>', '<UNK>')))
-            logf_endcoder = LogFreqEncoder(sequences=[aux.lemma for aux in trg_conllu])
+            logf_encoder = LogFreqEncoder(sequences=[aux.lemma for aux in trg_conllu])
             lemma_encoder = TextEncoder(
                 sequences=[aux.lemma for aux in trg_conllu],
                 max_vocab=args.lemma_vocabulary)
@@ -1217,7 +1223,7 @@ def main():
             head_encoder = TextEncoder(
                     sequences=[aux.head for aux in trg_conllu],
                     max_vocab=args.lemma_vocabulary)
-            dep_encoder = TextEncoder(sequences=[aux.deplbl for aux in trg_conllu])
+            deplbl_encoder = TextEncoder(sequences=[aux.deplbl for aux in trg_conllu])
             print('...done', file=sys.stderr, flush=True)
 
             if not args.target_embedding_dims is None:
@@ -1231,12 +1237,12 @@ def main():
                 'src_encoder': src_encoder,
                 'trg_encoder': trg_encoder,
                 'trg_char_encoder': trg_char_encoder,
-                'logf_endcoder': logf_endcoder,
+                'logf_encoder': logf_encoder,
                 'lemma_encoder': lemma_encoder,
                 'upos_encoder': upos_encoder,
                 'morph_encoder': morph_encoder,
                 'head_encoder': head_encoder,
-                'dep_encoder': dep_encoder,
+                'deplbl_encoder': deplbl_encoder,
                 'src_embedding_dims': args.word_embedding_dims,
                 'trg_embedding_dims': trg_embedding_dims,
                 'src_char_embedding_dims': args.char_embedding_dims,
@@ -1367,7 +1373,7 @@ def main():
             upos = config['upos_encoder'].encode_sequence(fields.upos)
             morph = config['morph_encoder'].encode_sequence(fields.morph)
             head = config['head_encoder'].encode_sequence(fields.head)
-            deplbl = config['dep_encoder'].encode_sequence(fields.deplbl)
+            deplbl = config['deplbl_encoder'].encode_sequence(fields.deplbl)
             return Aux(y, logf, lemma, upos, morph, head, deplbl)
 
 
