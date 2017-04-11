@@ -151,9 +151,10 @@ class LogFreqEncoder(object):
 
         return m, mask
 
-    def decode_sentence(self, encoded):
+    def decode_sentence(self, encoded, no_boundary=False):
         seq = encoded.sequence
-        if self.use_boundaries:
+        if self.use_boundaries and not no_boundary:
             seq = seq[1:]
-        return [str(np.exp(x) - 1) for x in seq]
+        #return [str(np.exp(x) - 1) for x in seq]
+        return [str(x) for x in seq]
 

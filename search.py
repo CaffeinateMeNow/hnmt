@@ -16,7 +16,7 @@ Hypothesis = namedtuple(
      'states',      # RNN state
      'coverage',    # accumulated coverage
      'unks',        # states at UNK symbols
-     'aux'])        # aux task
+     'aux'])        # states for aux task
 
 def by_sentence(beams):
     return itertools.groupby(
@@ -40,7 +40,7 @@ def beam_with_coverage(
         len_smooth=5.0,
         prune_margin=3.0,
         keep_unk_states=True,
-        decode_aux=None):
+        keep_aux_states=False):
     """Beam search algorithm.
 
     See the documentation for :meth:`greedy()`.
@@ -127,14 +127,19 @@ def beam_with_coverage(
                         cp = 0
                     norm_score = (score / lp) + cp
                 new_states = [[s[j, :] for s in ms] for ms in all_states]
-                if keep_unk_states or decode_aux:
-                    new_unks = tuple(unk[j, :] for unk in all_unks)
                 if keep_unk_states and symbol == unk_symbol:
+                    new_unks = tuple(unk[j, :] for unk in all_unks)
                     unks = hyp.unks + (new_unks,)
                 else:
                     unks = hyp.unks
-                if decode_aux is not None:
-                    aux = hyp.aux + (decode_aux(new_states[0], new_unks[0]),)
+                if keep_aux_states:
+                    # only for monitoring: doesn't do ensemble
+                    # FIXME: assumes word-decoder is single-layer
+                    h = new_states[0][0]
+                    h_breve = all_unks[0][j, :]
+                    new_aux = np.concatenate([h, h_breve], axis=-1).astype(
+                        dtype=theano.config.floatX)
+                    aux = hyp.aux + (new_aux,)
                 else:
                     aux = hyp.aux
                 extended.append(
