@@ -1133,7 +1133,8 @@ def main():
                            in enumerate(zip(test_src_sents, test_trg_conllu))
                            if accept_pair(pair)]
         test_src_sents = [test_src_sents[i] for i in test_keep_sents]
-        test_trg_sents = [test_trg_sents[i] for i in test_keep_sents]
+        #test_trg_sents = [test_trg_sents[i] for i in test_keep_sents]
+        test_trg_conllu = [test_trg_conllu[i] for i in test_keep_sents]
         n_test_sents = len(test_src_sents)
         if n_test_sents == 0:
             # if no test set is given, take one minibatch from train
