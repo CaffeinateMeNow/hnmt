@@ -1095,8 +1095,8 @@ def main():
             #test_trg_sents = read_sents(
             #        config['test_target'], config['target_tokenizer'],
             #        config['target_lowercase'] == 'yes')
-            test_trg_conllu = read_conllu(read_sents(
-                    config['test_target'], 'char', False))
+            test_trg_conllu = list(read_conllu(read_sents(
+                    config['test_target'], 'char', False)))
             #assert len(test_src_sents) == len(test_trg_sents)
             assert len(test_src_sents) == len(test_trg_conllu)
         else:
