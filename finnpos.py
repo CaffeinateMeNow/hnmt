@@ -12,40 +12,44 @@ MiniBatch = namedtuple('MiniBatch',
 # each of the fields contains a sequence with one element per token
 # the main 'sequence' is the sequence form
 # FIXME: split morph tags into multiple fields? lang-specific
-#   Finnish: Number, Case, Person, Mood, Tense, Misc=(Card/Ord/Post/Prep/Foreign/Abbr/AbbrNum)
-# FIXME: more options: is_compound? 
-Conllu = namedtuple('Conllu',
-    ['sequence', 'lemma', 'upos', 'morph', 'head', 'deplbl'])
+#   Finnish: Number, Case, Person, Mood, Tense
+Finnpos = namedtuple('Finnpos',
+    ['sequence', 'lemma', 'pos', 'num', 'case', 'pers', 'mood', 'tense'])
 Aux = namedtuple('Aux',
-    ['sequence', 'logf', 'lemma', 'upos', 'morph', 'head', 'deplbl'])
+    ['sequence', 'logf', 'lemma', 'pos', 'num', 'case', 'pers', 'mood', 'tense'])
+
+# julistan    _   julistaa    [POS=VERB]|[VOICE=ACT]|[MOOD=INDV]|[TENSE=PRESENT]|[PERS=SG1]   _   
         
-def conllu_helper(split):
+def finnpos_helper(split):
     columns = list(zip(*split))
     sequence = columns[1]
-    lemmas = columns[2]
-    upos = columns[3]
-    morphs = columns[5]     # as a single, pipe-separated string
-    heads = []           
-    for i in columns[6]:
-        i = int(i) 
-        if i > 0:
-            # lemma at i (CoNLL-U uses 1-based indexing)
-            head = columns[2][i-1]
-            # only last part of compound
-            head = head.split('#')[-1]
-            heads.append(head)
-        else:
-            heads.append('<ROOT>')
-    deplbl = columns[7]
-    return Conllu(sequence, lemmas, upos, morphs, heads, deplbl)
+    lemmas = columns[3]
+    combo_morphs = columns[4]     # as a single, pipe-separated string
+    pos = []
+    num = []
+    case = []
+    pers = []
+    mood = []
+    tense = []
+    for morphs in combo_morphs:
+        morphs = morphs.replace('[', '').replace(']', '')
+        morphs = morphs.split('|')
+        morphs = dict(pair.split('=') for pair in morphs)
+        pos.append(morphs.get('POS', 'UNKNOWN'))    # should already be UNKNOWN
+        num.append(morphs.get('NUM', '<NONE>'))
+        case.append(morphs.get('CASE', '<NONE>'))
+        pers.append(morphs.get('PERS', '<NONE>'))
+        mood.append(morphs.get('MOOD', '<NONE>'))
+        tense.append(morphs.get('TENSE', '<NONE>'))
+    return Finnpos(sequence, lemmas, pos, num, case, pers, mood, tense)
             
-def read_conllu(lines):
+def read_finnpos(lines):
     raw = []    
     for line in lines:
         line = line.strip()
         if len(line) == 0:
             # empty lines indicate sentence breaks
-            yield conllu_helper(raw)
+            yield finnpos_helper(raw)
             raw = []
             continue
         if line[0] == '#':
