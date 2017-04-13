@@ -18,7 +18,8 @@ from theano import tensor as T
 from text import TextEncoder, Encoded, TwoThresholdTextEncoder
 from search import beam_with_coverage
 from deepsequence import *
-from conllu import *
+#from finnpos import *
+from finnpos import *
 
 from bnas.model import Model, Linear, Embeddings, LSTMSequence
 from bnas.optimize import Adam, iterate_batches
@@ -203,7 +204,7 @@ class NMT(Model):
             dropout=config['dropout'],
             layernorm=config['layernorm']))
 
-        # logf, lemma, upos, morph, head, deplbl
+        # logf, lemma, pos, num, case, pers, mood, tense
         self.add(Linear(
             'aux_hidden',
             2 * config['decoder_state_dims'],
@@ -222,24 +223,24 @@ class NMT(Model):
             len(config['lemma_encoder'])))
 
         self.add(Linear(
-            'upos_emission',
+            'pos_emission',
             config['aux_dims'],
-            len(config['upos_encoder'])))
+            len(config['pos_encoder'])))
 
         self.add(Linear(
-            'morph_emission',
+            'num_emission',
             config['aux_dims'],
-            len(config['morph_encoder'])))
+            len(config['num_encoder'])))
 
         self.add(Linear(
-            'head_emission',
+            'case_emission',
             config['aux_dims'],
-            len(config['head_encoder'])))
+            len(config['case_encoder'])))
 
         self.add(Linear(
-            'deplbl_emission',
+            'pers_emission',
             config['aux_dims'],
-            len(config['deplbl_encoder'])))
+            len(config['pers_encoder'])))
 
         # The total loss is
         #   lambda_o*xent(target sentence) + lambda_a*xent(alignment)
@@ -346,15 +347,17 @@ class NMT(Model):
 
         logf = T.lmatrix('logf')
         lemma = T.lmatrix('lemma')
-        upos = T.lmatrix('upos')
-        morph = T.lmatrix('morph')
-        head = T.lmatrix('head')
-        deplbl = T.lmatrix('deplbl')
+        pos = T.lmatrix('pos')
+        num = T.lmatrix('num')
+        case = T.lmatrix('case')
+        pers = T.lmatrix('pers')
+        mood = T.lmatrix('mood')
+        tense = T.lmatrix('tense')
         aux_in = T.matrix('aux_in')     # FIXME: calculations not minibatched!
 
         self.x = [inputs, inputs_mask, chars, chars_mask]
         self.y = [outputs, outputs_mask, out_chars, out_chars_mask, attention]
-        self.aux = [logf, lemma, upos, morph, head, deplbl]
+        self.aux = [logf, lemma, pos, num, case, pers, mood, tense]
 
         self.encode_fun = function(self.x, self.encode(*self.x))
         self.xent_fun = function(
@@ -364,13 +367,14 @@ class NMT(Model):
 
     def xent(self, inputs, inputs_mask, chars, chars_mask,
              outputs, outputs_mask, out_chars, out_chars_mask, attention,
-             logf, lemma, upos, morph, head, deplbl):
+             *aux):
         unked_outputs, charlevel_indices = \
             self.config['trg_encoder'].split_unk_outputs(
                 outputs, outputs_mask)
         (pred_outputs, pred_char_outputs, pred_attention, 
-         pred_logf, pred_lemma, pred_upos, pred_morph,
-         pred_head, pred_deplbl) = \
+         pred_logf, pred_lemma, pred_pos,
+         pred_num, pred_case, pred_pers,
+         pred_mood, pred_tense) = \
             self.predict_aux(
                 inputs, inputs_mask, chars, chars_mask,
                 unked_outputs, charlevel_indices, outputs_mask,
@@ -380,18 +384,23 @@ class NMT(Model):
         char_outputs_xent = batch_sequence_crossentropy(
                 pred_char_outputs, out_chars[1:], out_chars_mask[1:])
         # aux costs
+        lemma, pos, num, case, pers, mood, tense = aux
         aux_xent = batch_sequence_crossentropy(
             pred_logf, logf[1:], outputs_mask[1:])
         aux_xent += batch_sequence_crossentropy(
             pred_lemma, lemma[1:], outputs_mask[1:])
         aux_xent += batch_sequence_crossentropy(
-            pred_upos, upos[1:], outputs_mask[1:])
+            pred_pos, pos[1:], outputs_mask[1:])
         aux_xent += batch_sequence_crossentropy(
-            pred_morph, morph[1:], outputs_mask[1:])
+            pred_num, num[1:], outputs_mask[1:])
         aux_xent += batch_sequence_crossentropy(
-            pred_head, head[1:], outputs_mask[1:])
+            pred_case, case[1:], outputs_mask[1:])
         aux_xent += batch_sequence_crossentropy(
-            pred_deplbl, deplbl[1:], outputs_mask[1:])
+            pred_pers, pers[1:], outputs_mask[1:])
+        aux_xent += batch_sequence_crossentropy(
+            pred_mood, mood[1:], outputs_mask[1:])
+        aux_xent += batch_sequence_crossentropy(
+            pred_tense, tense[1:], outputs_mask[1:])
         aux_xent *= self.config['aux_cost_weight']
         aux_xent = theano.printing.Print('aux_xent')(aux_xent)
         # Note that pred_attention will contain zero elements for masked-out
@@ -738,28 +747,36 @@ class NMT(Model):
             # could also have common emission layer and slice before softmax
             pred_logf   = softmax_3d(self.logf_emission(  aux_proj))
             pred_lemma  = softmax_3d(self.lemma_emission( aux_proj))
-            pred_upos   = softmax_3d(self.upos_emission(  aux_proj))
-            pred_morph  = softmax_3d(self.morph_emission( aux_proj))
-            pred_head   = softmax_3d(self.head_emission(  aux_proj))
-            pred_deplbl = softmax_3d(self.deplbl_emission(aux_proj))
+            pred_pos    = softmax_3d(self.pos_emission(   aux_proj))
+            pred_num    = softmax_3d(self.num_emission(   aux_proj))
+            pred_case   = softmax_3d(self.case_emission(  aux_proj))
+            pred_pers   = softmax_3d(self.pers_emission(  aux_proj))
+            pred_mood   = softmax_3d(self.mood_emission(  aux_proj))
+            pred_tense  = softmax_3d(self.tense_emission( aux_proj))
         else:
-            (pred_logf, pred_lemma, pred_upos, pred_morph,
-             pred_head, pred_deplbl) = (None,) * 6
+            (pred_logf, pred_lemma, pred_pos,
+             pred_num, pred_case, pred_pers,
+             pred_mood, pred_tense) = (None,) * 8
 
         return (pred_seq, char_pred_seq, attention_seq,
-                pred_logf, pred_lemma, pred_upos, pred_morph,
-                pred_head, pred_deplbl)
+                pred_logf, pred_lemma, pred_pos,
+                pred_num, pred_case, pred_pers,
+                pred_mood, pred_tense)
 
     def aux_step(self, aux_in):
         aux_proj = T.tanh(self.aux_hidden(aux_in))
         # could also have common emission layer and slice before softmax
         pred_logf   = T.nnet.softmax(self.logf_emission(  aux_proj))
         pred_lemma  = T.nnet.softmax(self.lemma_emission( aux_proj))
-        pred_upos   = T.nnet.softmax(self.upos_emission(  aux_proj))
-        pred_morph  = T.nnet.softmax(self.morph_emission( aux_proj))
-        pred_head   = T.nnet.softmax(self.head_emission(  aux_proj))
-        pred_deplbl = T.nnet.softmax(self.deplbl_emission(aux_proj))
-        return (pred_logf, pred_lemma, pred_upos, pred_morph, pred_head, pred_deplbl)
+        pred_pos    = T.nnet.softmax(self.pos_emission(   aux_proj))
+        pred_num    = T.nnet.softmax(self.num_emission(   aux_proj))
+        pred_case   = T.nnet.softmax(self.case_emission(  aux_proj))
+        pred_pers   = T.nnet.softmax(self.pers_emission(  aux_proj))
+        pred_mood   = T.nnet.softmax(self.mood_emission(  aux_proj))
+        pred_tense  = T.nnet.softmax(self.tense_emission( aux_proj))
+        return (pred_logf, pred_lemma, pred_pos,
+                pred_num, pred_case, pred_pers,
+                pred_mood, pred_tense)
 
     def create_optimizer(self):
         return Adam(
@@ -1095,14 +1112,14 @@ def main():
             #test_trg_sents = read_sents(
             #        config['test_target'], config['target_tokenizer'],
             #        config['target_lowercase'] == 'yes')
-            test_trg_conllu = list(read_conllu(read_sents(
+            test_trg_finnpos = list(read_finnpos(read_sents(
                     config['test_target'], 'char', False)))
             #assert len(test_src_sents) == len(test_trg_sents)
-            assert len(test_src_sents) == len(test_trg_conllu)
+            assert len(test_src_sents) == len(test_trg_finnpos)
         else:
             test_src_sents = []
             test_trg_sents = []
-            test_trg_conllu = []
+            test_trg_finnpos = []
 
         print('reading sentences...', file=sys.stderr, flush=True)
         src_sents = read_sents(
@@ -1111,11 +1128,11 @@ def main():
         #trg_sents = read_sents(
         #        config['target'], config['target_tokenizer'],
         #        config['target_lowercase'] == 'yes')
-        trg_conllu = list(read_conllu(read_sents(
+        trg_finnpos = list(read_finnpos(read_sents(
                 config['target'], 'char', False)))
         print('...done', file=sys.stderr, flush=True)
         #assert len(src_sents) == len(trg_sents)
-        assert len(src_sents) == len(trg_conllu)
+        assert len(src_sents) == len(trg_finnpos)
 
         max_source_length = config['max_source_length']
         max_target_length = config['max_target_length']
@@ -1130,17 +1147,17 @@ def main():
             return True
 
         test_keep_sents = [i for i,pair
-                           in enumerate(zip(test_src_sents, test_trg_conllu))
+                           in enumerate(zip(test_src_sents, test_trg_finnpos))
                            if accept_pair(pair)]
         test_src_sents = [test_src_sents[i] for i in test_keep_sents]
         #test_trg_sents = [test_trg_sents[i] for i in test_keep_sents]
-        test_trg_conllu = [test_trg_conllu[i] for i in test_keep_sents]
+        test_trg_finnpos = [test_trg_finnpos[i] for i in test_keep_sents]
         n_test_sents = len(test_src_sents)
         if n_test_sents == 0:
             # if no test set is given, take one minibatch from train
             n_test_sents = config['batch_size']
 
-        keep_sents = [i for i,pair in enumerate(zip(src_sents, trg_conllu))
+        keep_sents = [i for i,pair in enumerate(zip(src_sents, trg_finnpos))
                       if accept_pair(pair)]
         random.shuffle(keep_sents)
         # test set is prepended to shuffled test set,
@@ -1148,14 +1165,14 @@ def main():
         # of a single data set
         src_sents = test_src_sents + [src_sents[i] for i in keep_sents]
         #trg_sents = test_trg_sents + [trg_sents[i] for i in keep_sents]
-        trg_conllu = test_trg_conllu + [trg_conllu[i] for i in keep_sents]
+        trg_finnpos = test_trg_finnpos + [trg_finnpos[i] for i in keep_sents]
 
         if not max_source_length:
             config['max_source_length'] = max(map(len, src_sents))
         #if not max_target_length:
         #    config['max_target_length'] = max(map(len, trg_sents))
         if not max_target_length:
-            config['max_target_length'] = max(len(x.sequence) for x in trg_conllu)
+            config['max_target_length'] = max(len(x.sequence) for x in trg_finnpos)
 
         if args.alignment_loss:
             # FIXME: remove this?
@@ -1189,7 +1206,7 @@ def main():
             # The mapping from translation tokens to alignment tokens is also
             # returned as a list (of the same size as the translation
             # sentence).
-            trg_sents = [x.sequence for x in trg_conllu]
+            trg_sents = [x.sequence for x in trg_finnpos]
             src_tokens, src_maps = list(zip(*
                 [make_tokens(sent, config['source_tokenizer'])
                  for sent in src_sents]))
@@ -1227,26 +1244,26 @@ def main():
                     max_vocab=args.source_vocabulary,
                     sub_encoder=src_char_encoder)
             trg_char_encoder = TextEncoder(
-                    sequences=[token for sent in trg_conllu for token in sent.sequence],
+                    sequences=[token for sent in trg_finnpos for token in sent.sequence],
                     min_count=args.min_char_count)
             trg_encoder = TwoThresholdTextEncoder(
-                    sequences=[sent.sequence for sent in trg_conllu],
+                    sequences=[sent.sequence for sent in trg_finnpos],
                     max_vocab=args.target_vocabulary,
                     low_thresh=args.hybrid_extra_char_threshold,
                     sub_encoder=trg_char_encoder,
                     special=(('<S>', '</S>')
                              if config['target_tokenizer'] == 'char'
                              else ('<S>', '</S>', '<UNK>')))
-            logf_encoder = LogFreqEncoder(sequences=[aux.lemma for aux in trg_conllu])
+            logf_encoder = LogFreqEncoder(sequences=[aux.lemma for aux in trg_finnpos])
             lemma_encoder = TextEncoder(
-                sequences=[aux.lemma for aux in trg_conllu],
+                sequences=[aux.lemma for aux in trg_finnpos],
                 max_vocab=args.lemma_vocabulary)
-            upos_encoder = TextEncoder(sequences=[aux.upos for aux in trg_conllu])
-            morph_encoder = TextEncoder(sequences=[aux.morph for aux in trg_conllu])
-            head_encoder = TextEncoder(
-                    sequences=[aux.head for aux in trg_conllu],
-                    max_vocab=args.lemma_vocabulary)
-            deplbl_encoder = TextEncoder(sequences=[aux.deplbl for aux in trg_conllu])
+            pos_encoder = TextEncoder(sequences=[aux.pos for aux in trg_finnpos])
+            num_encoder = TextEncoder(sequences=[aux.num for aux in trg_finnpos])
+            case_encoder = TextEncoder(sequences=[aux.case for aux in trg_finnpos])
+            pers_encoder = TextEncoder(sequences=[aux.pers for aux in trg_finnpos])
+            mood_encoder = TextEncoder(sequences=[aux.mood for aux in trg_finnpos])
+            tense_encoder = TextEncoder(sequences=[aux.tense for aux in trg_finnpos])
             print('...done', file=sys.stderr, flush=True)
 
             if not args.target_embedding_dims is None:
@@ -1262,10 +1279,12 @@ def main():
                 'trg_char_encoder': trg_char_encoder,
                 'logf_encoder': logf_encoder,
                 'lemma_encoder': lemma_encoder,
-                'upos_encoder': upos_encoder,
-                'morph_encoder': morph_encoder,
-                'head_encoder': head_encoder,
-                'deplbl_encoder': deplbl_encoder,
+                'pos_encoder': pos_encoder,
+                'num_encoder': num_encoder,
+                'case_encoder': case_encoder,
+                'pers_encoder': pers_encoder,
+                'mood_encoder': mood_encoder,
+                'tense_encoder': tense_encoder,
                 'src_embedding_dims': args.word_embedding_dims,
                 'trg_embedding_dims': trg_embedding_dims,
                 'src_char_embedding_dims': args.char_embedding_dims,
@@ -1359,28 +1378,36 @@ def main():
                 print(' '.join(
                     config['lemma_encoder'].decode_sentence(trg.lemma)))
                 print(' '.join(
-                    config['upos_encoder'].decode_sentence(trg.upos)))
+                    config['pos_encoder'].decode_sentence(trg.pos)))
                 print(' '.join(
-                    config['morph_encoder'].decode_sentence(trg.morph)))
+                    config['num_encoder'].decode_sentence(trg.num)))
                 print(' '.join(
-                    config['head_encoder'].decode_sentence(trg.head)))
+                    config['case_encoder'].decode_sentence(trg.case)))
                 print(' '.join(
-                    config['deplbl_encoder'].decode_sentence(trg.deplbl)))
+                    config['pers_encoder'].decode_sentence(trg.pers)))
+                print(' '.join(
+                    config['mood_encoder'].decode_sentence(trg.mood)))
+                print(' '.join(
+                    config['tense_encoder'].decode_sentence(trg.tense)))
                 print('-'*72)
                 # pred aux
-                logf, lemma, upos, morph, head, deplbl = aux
+                logf, lemma, pos, num, case, pers, mood, tense = aux
                 print(' '.join(
                     config['logf_encoder'].decode_sentence(Encoded(logf, None), no_boundary=True)))
                 print(' '.join(
                     config['lemma_encoder'].decode_sentence(Encoded(lemma, None))))
                 print(' '.join(
-                    config['upos_encoder'].decode_sentence(Encoded(upos, None))))
+                    config['pos_encoder'].decode_sentence(Encoded(pos, None))))
                 print(' '.join(
-                    config['morph_encoder'].decode_sentence(Encoded(morph, None))))
+                    config['num_encoder'].decode_sentence(Encoded(num, None))))
                 print(' '.join(
-                    config['head_encoder'].decode_sentence(Encoded(head, None))))
+                    config['case_encoder'].decode_sentence(Encoded(case, None))))
                 print(' '.join(
-                    config['deplbl_encoder'].decode_sentence(Encoded(deplbl, None))))
+                    config['pers_encoder'].decode_sentence(Encoded(pers, None))))
+                print(' '.join(
+                    config['mood_encoder'].decode_sentence(Encoded(mood, None))))
+                print(' '.join(
+                    config['tense_encoder'].decode_sentence(Encoded(tense, None))))
                 print('='*72)
         
 
@@ -1446,15 +1473,27 @@ def main():
                                     dtype=theano.config.floatX),)
             return MiniBatch(x, y, aux)
 
-        def encode_conllu(fields):
+        #def encode_finnpos(fields):
+        #    y = config['trg_encoder'].encode_sequence(fields.sequence)
+        #    logf = config['logf_encoder'].encode_sequence(fields.lemma)
+        #    lemma = config['lemma_encoder'].encode_sequence(fields.lemma)
+        #    pos = config['pos_encoder'].encode_sequence(fields.pos)
+        #    morph = config['morph_encoder'].encode_sequence(fields.morph)
+        #    head = config['head_encoder'].encode_sequence(fields.head)
+        #    deplbl = config['deplbl_encoder'].encode_sequence(fields.deplbl)
+        #    return Aux(y, logf, lemma, pos, morph, head, deplbl)
+
+        def encode_finnpos(fields):
             y = config['trg_encoder'].encode_sequence(fields.sequence)
             logf = config['logf_encoder'].encode_sequence(fields.lemma)
             lemma = config['lemma_encoder'].encode_sequence(fields.lemma)
-            upos = config['upos_encoder'].encode_sequence(fields.upos)
-            morph = config['morph_encoder'].encode_sequence(fields.morph)
-            head = config['head_encoder'].encode_sequence(fields.head)
-            deplbl = config['deplbl_encoder'].encode_sequence(fields.deplbl)
-            return Aux(y, logf, lemma, upos, morph, head, deplbl)
+            pos = config['pos_encoder'].encode_sequence(fields.pos)
+            num = config['num_encoder'].encode_sequence(fields.num)
+            case = config['case_encoder'].encode_sequence(fields.case)
+            pers = config['pers_encoder'].encode_sequence(fields.pers)
+            mood = config['mood_encoder'].encode_sequence(fields.mood)
+            tense = config['tense_encoder'].encode_sequence(fields.tense)
+            return Aux(y, logf, lemma, pos, num, case, pers, mood, tense)
 
 
         # encoding in advance
@@ -1462,7 +1501,7 @@ def main():
                      for sent in src_sents]
         #trg_sents = [config['trg_encoder'].encode_sequence(sent)
         #             for sent in trg_sents]
-        trg_sents = [encode_conllu(sent) for sent in trg_conllu]
+        trg_sents = [encode_finnpos(sent) for sent in trg_finnpos]
 
         # reseparating "test" set from train set
         test_src = src_sents[:n_test_sents]

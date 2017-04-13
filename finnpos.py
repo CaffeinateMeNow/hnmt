@@ -22,9 +22,9 @@ Aux = namedtuple('Aux',
         
 def finnpos_helper(split):
     columns = list(zip(*split))
-    sequence = columns[1]
-    lemmas = columns[3]
-    combo_morphs = columns[4]     # as a single, pipe-separated string
+    sequence = columns[0]
+    lemmas = columns[2]
+    combo_morphs = columns[3]     # as a single, pipe-separated string
     pos = []
     num = []
     case = []
@@ -34,7 +34,8 @@ def finnpos_helper(split):
     for morphs in combo_morphs:
         morphs = morphs.replace('[', '').replace(']', '')
         morphs = morphs.split('|')
-        morphs = dict(pair.split('=') for pair in morphs)
+        morphs = dict(pair.split('=') for pair in morphs
+                      if '=' in pair)
         pos.append(morphs.get('POS', 'UNKNOWN'))    # should already be UNKNOWN
         num.append(morphs.get('NUM', '<NONE>'))
         case.append(morphs.get('CASE', '<NONE>'))
