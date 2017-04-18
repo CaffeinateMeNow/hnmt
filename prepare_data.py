@@ -6,7 +6,7 @@ import random
 LineLengths = collections.namedtuple('LineLengths',
     ['idx', 'src_len', 'tgt_len'])
 LineStatistics = collections.namedtuple('LineStatistics',
-    ['idx', 'shard', 'src_len', 'tgt_len', 'n_unk', 'group'])
+    ['idx', 'shard', 'group', 'src_len', 'tgt_len', 'src_unks', 'tgt_unks'])
 
 class SplitNode(object):
     def __init__(self, threshold, left, right, tgt=False):
@@ -44,8 +44,8 @@ class ShardedData(object):
     def __init__(self,
                  src_lines,
                  tgt_lines,
-                 src_encoders,
-                 tgt_encoders,
+                 src_encoder,
+                 tgt_encoder,
                  src_max_len=600,
                  tgt_max_len=600,
                  min_lines_per_group=128,
@@ -54,9 +54,9 @@ class ShardedData(object):
         # callables, yielding tokenized lines
         self.src_lines = src_lines
         self.tgt_lines = tgt_lines
-        # list of functions: vocab=Counter -> encoder
-        self.src_encoder_funcs = src_encoders
-        self.tgt_encoder_funcs = tgt_encoders
+        # single new-style encoder per side
+        self.src_encoder = src_encoder
+        self.tgt_encoder = tgt_encoder
         self.src_max_len = src_max_len
         self.tgt_max_len = tgt_max_len
         self.min_lines_per_group = min_lines_per_group
@@ -66,17 +66,11 @@ class ShardedData(object):
         self.line_lens = []
         # later LineStatistics
         self.line_statistics = []
-        self.src_token_counts = [collections.Counter()
-                                 for _ in self.src_encoder_funcs]
-        self.tgt_token_counts = [collections.Counter()
-                                 for _ in self.tgt_encoder_funcs]
-        self.src_encoders = None
-        self.trg_encoders = None
         self.n_shards = None
         self.shard_indices = None
         # decision tree
         self.padding_group_thresholds = None
-        self.current_group = 0
+        self.n_groups = 0
 
     def prepare_data(self):
         self.collect_statistics()
@@ -97,10 +91,8 @@ class ShardedData(object):
             # length distribution => thresholds for padding groups
             self.line_lens.append(LineLengths(i, src_len, tgt_len))
             # token counts => vocabulary index (encoder)
-            for (field, counter) in zip(src, self.src_token_counts):
-                counter.update(field)
-            for (field, counter) in zip(tgt, self.tgt_token_counts):
-                counter.update(field)
+            self.src_encoder.count(src)
+            self.tgt_encoder.count(tgt)
         # preassign sentences to shards by random draw without replacement
         self.n_shards = int(np.ceil(len(self.line_lens) / self.max_lines_per_shard))
         lines_per_shard = int(np.ceil(len(self.line_lens) / self.n_shards))
@@ -108,11 +100,9 @@ class ShardedData(object):
         random.shuffle(self.shard_indices)
         # choose thresholds for padding groups
         self.padding_group_thresholds = self.choose_thresholds(self.line_lens, tgt=False)
-        # make encoders
-        self.src_encoders = [func(vocab=counts) for (func, counts)
-                             in zip(self.src_encoder_funcs, self.src_token_counts)]
-        self.tgt_encoders = [func(vocab=counts) for (func, counts)
-                             in zip(self.tgt_encoder_funcs, self.tgt_token_counts)]
+        # decide vocabularies for encoders
+        self.src_encoder.done()
+        self.tgt_encoder.done()
 
     def choose_thresholds(self, lines, tgt):
         if tgt:
@@ -140,8 +130,8 @@ class ShardedData(object):
             right = self.choose_thresholds(lines[mid:], not tgt)
             return SplitNode(threshold, left, right, tgt)
         else:
-            leaf = LeafNode(self.current_group)
-            self.current_group += 1
+            leaf = LeafNode(self.n_groups)
+            self.n_groups += 1
             return leaf
 
 
@@ -152,6 +142,7 @@ class ShardedData(object):
                               for (line, sid)
                               in zip(self.line_lens, self.shard_indices)
                               if sid == shard}
+            encoded = [list() for _ in range(self.n_groups)]
             # one pass over the data per shard
             for (i, (src, tgt)) in enumerate(safe_zip(self.src_lines(),
                                                       self.tgt_lines())):
@@ -162,11 +153,21 @@ class ShardedData(object):
                 # choose padding group by lengths
                 group = self.padding_group_thresholds.decide(stats)
                 # encode
-
+                src_enc = self.src_encoder.encode(src)
+                tgt_enc = self.tgt_encoder.encode(tgt)
+                encoded[group].append((src_enc, tgt_enc))
                 # also track number of unks
-                self.line_statistics
+                self.line_statistics.append(
+                    (line.idx, shard, group,
+                     line.src_len, line.tgt_len,
+                     len(src_enc.surface.unknowns),
+                     len(trg_enc.surface.unknowns)))
             # pad and concatenate groups
-            # save encoded data
+            for (group, pairs) in enumerate(encoded):
+                srcs, tgts = zip(*pairs)
+                padded_src = self.src_encoder.pad_sentences(srcs)
+                padded_trg = self.trg_encoder.pad_sentences(trgs)
+                # FIXME save encoded data
 
 
 def safe_zip(*iterables):
