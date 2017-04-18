@@ -24,24 +24,12 @@ def finnpos_helper(split):
     columns = list(zip(*split))
     sequence = columns[0]
     lemmas = columns[2]
-    combo_morphs = columns[3]     # as a single, pipe-separated string
-    pos = []
-    num = []
-    case = []
-    pers = []
-    mood = []
-    tense = []
-    for morphs in combo_morphs:
-        morphs = morphs.replace('[', '').replace(']', '')
-        morphs = morphs.split('|')
-        morphs = dict(pair.split('=') for pair in morphs
-                      if '=' in pair)
-        pos.append(morphs.get('POS', 'UNKNOWN'))    # should already be UNKNOWN
-        num.append(morphs.get('NUM', '<NONE>'))
-        case.append(morphs.get('CASE', '<NONE>'))
-        pers.append(morphs.get('PERS', '<NONE>'))
-        mood.append(morphs.get('MOOD', '<NONE>'))
-        tense.append(morphs.get('TENSE', '<NONE>'))
+    pos = columns[3]
+    num = columns[4]
+    case = columns[5]
+    pers = columns[6]
+    mood = columns[7]
+    tense = columns[8]
     return Finnpos(sequence, lemmas, pos, num, case, pers, mood, tense)
             
 def read_finnpos(lines):

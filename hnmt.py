@@ -242,6 +242,16 @@ class NMT(Model):
             config['aux_dims'],
             len(config['pers_encoder'])))
 
+        self.add(Linear(
+            'mood_emission',
+            config['aux_dims'],
+            len(config['mood_encoder'])))
+
+        self.add(Linear(
+            'tense_emission',
+            config['aux_dims'],
+            len(config['tense_encoder'])))
+
         # The total loss is
         #   lambda_o*xent(target sentence) + lambda_a*xent(alignment)
         self.lambda_o = theano.shared(
@@ -384,7 +394,7 @@ class NMT(Model):
         char_outputs_xent = batch_sequence_crossentropy(
                 pred_char_outputs, out_chars[1:], out_chars_mask[1:])
         # aux costs
-        lemma, pos, num, case, pers, mood, tense = aux
+        logf, lemma, pos, num, case, pers, mood, tense = aux
         aux_xent = batch_sequence_crossentropy(
             pred_logf, logf[1:], outputs_mask[1:])
         aux_xent += batch_sequence_crossentropy(
