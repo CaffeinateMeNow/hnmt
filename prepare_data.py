@@ -50,10 +50,10 @@ class ShardedData(object):
                  tgt_encoder,
                  src_max_len=600,
                  tgt_max_len=600,
-                 min_lines_per_group=128,
                  max_lines_per_shard=1000000,
+                 min_lines_per_group=128,
                  min_saved_padding=2048,
-                 file_fmt='{corpus}.shard{shard:03}.group{group:03}.npz',
+                 file_fmt='{corpus}.shard{shard:03}.group{group:03}.pickle',
                  vocab_file_fmt='{corpus}.vocab.pickle'):
         self.corpus = corpus
         # callables, yielding tokenized lines
@@ -242,3 +242,121 @@ def safe_zip(*iterables):
                 raise ValueError('Column {} was too short. '
                     'Row {} (and later) missing.'.format(i, j))
         yield tpl
+
+
+def main():
+    import argparse
+    parser = argparse.ArgumentParser(
+        description='Prepare data for HNMT')
+
+        parser.add_argument('corpus', type=str,
+            metavar='corpus',
+            help='name of corpus')
+        parser.add_argument('source', type=str,
+            metavar='FILE',
+            help='name of source language file')
+        parser.add_argument('target', type=str,
+            metavar='FILE',
+            help='name of target language file')
+
+        parser.add_argument('--source-format', type=str,
+                choices=('char', 'hybrid', 'finnpos'),
+                help='type of preprocessing for source text')
+        parser.add_argument('--target-format', type=str,
+                choices=('char', 'hybrid', 'finnpos'),
+                help='type of preprocessing for target text')
+        parser.add_argument('--max-source-length', type=int,
+                metavar='N',
+                help='maximum length of source sentence (in tokens)')
+        parser.add_argument('--max-target-length', type=int,
+                metavar='N',
+                help='maximum length of target sentence (in tokens)')
+        parser.add_argument('--max-source-word-length', type=int,
+                metavar='N',
+                help='maximum length of source word in chars')
+        parser.add_argument('--max-target-word-length', type=int,
+                metavar='N',
+                help='maximum length of target word in chars')
+        parser.add_argument('--min-char-count', type=int,
+                metavar='N',
+                help='drop all characters with count < N in training data')
+        parser.add_argument('--source-vocabulary', type=int, default=10000,
+                metavar='N',
+                help='maximum size of source word-level vocabulary')
+        parser.add_argument('--target-vocabulary', type=int, default=10000,
+                metavar='N',
+                help='maximum size of target word-level vocabulary')
+        parser.add_argument('--lemma-vocabulary', type=int, default=10000,
+                metavar='N',
+                help='size of lemma vocabulary for aux task')
+        parser.add_argument('--hybrid-vocabulary-overlap', type=int, default=0,
+                metavar='N',
+                help='overlap vocabularies of word and character-level decoder '
+                'during training with all except this number of least frequent words')
+        parser.add_argument('--max-lines-per-shard', type=int, default=1000000,
+                metavar='N',
+                help='Approximate size of the shards, in sentences.')
+        parser.add_argument('--min-lines-per-group', type=int, default=128,
+                metavar='N',
+                help='Do not split a padding group if the result would contain '
+                'less than this number of sentences.')
+        parser.add_argument('--min-saved-padding', type=int, default=2048,
+                metavar='N',
+                help='Do not split a padding group if the result would save '
+                'less than this number of timesteps of wasted padding.')
+        parser.add_argument('--filenames', type=str,
+                 default='{corpus}.shard{shard:03}.group{group:03}.pickle',
+                 help='Template string for sharded file names. '
+                 'Use {corpus}, {shard} and {group}.')
+        parser.add_argument('--filenames', type=str,
+                 default='{corpus}.vocab.pickle'):
+                 help='Template string for vocabulary file name. '
+                 'Use {corpus}.')
+
+        # reusable readers for input files
+        # FIXME
+
+        # type of encoders depends on format
+        if args.source_format == 'char':
+            # TextEncoder from all chars
+            raise NotImplementedError()
+        elif args.source_format == 'hybrid':
+            # TextEncoder from all words
+            # subbed TextEncoder for the chars
+            # FIXME
+        elif args.source_format == 'finnpos':
+            # FinnposEncoder does the lot
+            # FIXME
+
+        #src_char_encoder = TextEncoder(
+        #        sequences=[token for sent in src_sents for token in sent],
+        #        min_count=args.min_char_count,
+        #        special=())
+        #src_encoder = TextEncoder(
+        #        sequences=src_sents,
+        #        max_vocab=args.source_vocabulary,
+        #        sub_encoder=src_char_encoder)
+        #trg_char_encoder = TextEncoder(
+        #        sequences=[token for sent in trg_finnpos for token in sent.sequence],
+        #        min_count=args.min_char_count)
+        #trg_encoder = TwoThresholdTextEncoder(
+        #        sequences=[sent.sequence for sent in trg_finnpos],
+        #        max_vocab=args.target_vocabulary,
+        #        low_thresh=args.hybrid_extra_char_threshold,
+        #        sub_encoder=trg_char_encoder,
+        #        special=(('<S>', '</S>')
+        #                    if config['target_tokenizer'] == 'char'
+        #                    else ('<S>', '</S>', '<UNK>')))
+
+        sharded = ShardedData(
+            args.corpus,
+            src_reader,
+            tgt_reader,
+            src_encoder,
+            trg_encoder,
+            max_lines_per_shard=args.max_lines_per_shard,
+            min_lines_per_group=args.min_lines_per_group,
+            min_saved_padding=args.min_saved_padding,
+            file_fmt=args.file_fmt,
+            vocab_file_fmt=args.vocab_file_fmt)
+        sharded.prepare_data()
