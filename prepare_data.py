@@ -8,6 +8,38 @@ LineLengths = collections.namedtuple('LineLengths',
 LineStatistics = collections.namedtuple('LineStatistics',
     ['idx', 'shard', 'src_len', 'tgt_len', 'n_unk', 'group'])
 
+class SplitNode(object):
+    def __init__(self, threshold, left, right, tgt=False):
+        self.threshold = threshold
+        self.left = left
+        self.right = right
+        self.tgt = tgt
+
+    def decide(self, linelens):
+        val = linelens.tgt_len if self.tgt else linelens.src_len
+        if val < self.threshold:
+            return self.left.decide(linelens)
+        else:
+            return self.right.decide(linelens)
+
+    def __repr__(self):
+        return 'S({}:{}, {}, {})'.format(
+            'tgt' if self.tgt else 'src',
+            self.threshold,
+            repr(self.left),
+            repr(self.right))
+
+class LeafNode(object):
+    def __init__(self, group_idx):
+        self.group_idx = group_idx
+
+    def decide(self, linelens):
+        return self.group_idx
+
+    def __repr__(self):
+        return 'L({})'.format(self.group_idx)
+
+
 class ShardedData(object):
     def __init__(self,
                  src_lines,
@@ -32,12 +64,15 @@ class ShardedData(object):
         self.min_saved_padding = min_saved_padding
         # first LineLengths, later LineStatistics
         self.line_stats = []
-        self.src_token_counts = [collections.counter()
+        self.src_token_counts = [collections.Counter()
                                  for _ in self.src_encoders]
-        self.tgt_token_counts = [collections.counter()
+        self.tgt_token_counts = [collections.Counter()
                                  for _ in self.tgt_encoders]
         self.n_shards = None
         self.shard_indices = None
+        # decision tree
+        self.padding_group_thresholds = None
+        self.current_group = 0
 
     def collect_statistics(self):
         # first pass
@@ -63,12 +98,39 @@ class ShardedData(object):
         lines_per_shard = int(np.ceil(len(self.line_stats) / self.n_shards))
         self.shard_indices = [j for i in range(self.n_shards) for j in [i] * lines_per_shard]
         random.shuffle(self.shard_indices)
-        #- choose thresholds for padding groups
-        #    - sort lengths
-        #    - calculate cumulative padding waste function
-        #    - select threshold to maximize saving
-        #        - mid * (len[end] - len[mid])
-        #    - split src/tgt alternatingly, while enough samples and big enough saving
+        # choose thresholds for padding groups
+        self.padding_group_thresholds = self.choose_thresholds(self.line_stats, tgt=False)
+
+    def choose_thresholds(self, lines, tgt):
+        if tgt:
+            lenfunc = lambda x: x.tgt_len
+        else:
+            lenfunc = lambda x: x.src_len
+        # sort lengths
+        lines = sorted(lines, key=lenfunc)
+        lens = np.array([lenfunc(x) for x in lines])
+        # select threshold to maximize reduced padding waste
+        waste = lens[-1] - lens
+        savings = np.arange(len(lens)) * waste
+        mid = np.argmax(savings)
+        # criteria for split
+        split_ok = True
+        if savings[mid] < self.min_saved_padding:
+            # savings are not big enough
+            split_ok = False
+        if min(mid, len(lens) - mid) < self.min_lines_per_group:
+            # too small group
+            split_ok = False
+        if split_ok:
+            threshold = lens[mid]
+            left = self.choose_thresholds(lines[:mid], not tgt)
+            right = self.choose_thresholds(lines[mid:], not tgt)
+            return SplitNode(threshold, left, right, tgt)
+        else:
+            leaf = LeafNode(self.current_group)
+            self.current_group += 1
+            return leaf
+
 
     def encode(self):
         #- second pass
@@ -76,6 +138,7 @@ class ShardedData(object):
         #        - choose padding group by lengths
         #        - encode, pad and concatenate
         #        - also track number of unks
+        pass
 
     def prepare_data(self):
         self.collect_statistics()
