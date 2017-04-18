@@ -7,7 +7,7 @@ import cPickle as pickle
 LineLengths = collections.namedtuple('LineLengths',
     ['idx', 'src_len', 'tgt_len'])
 LineStatistics = collections.namedtuple('LineStatistics',
-    ['idx', 'shard', 'group', 'src_len', 'tgt_len', 'src_unks', 'tgt_unks'])
+    ['idx', 'shard', 'group', 'idx_in_group', 'src_len', 'tgt_len', 'src_unks', 'tgt_unks'])
 
 class SplitNode(object):
     def __init__(self, threshold, left, right, tgt=False):
@@ -160,31 +160,65 @@ class ShardedData(object):
                 # encode
                 src_enc = self.src_encoder.encode(src)
                 tgt_enc = self.tgt_encoder.encode(tgt)
-                encoded[group].append((src_enc, tgt_enc))
                 # also track number of unks
-                self.line_statistics.append(
-                    (line.idx, shard, group,
+                self.line_statistics.append(LineStatistics
+                    (line.idx, shard, group, len(encoded[group]),
                      line.src_len, line.tgt_len,
                      len(src_enc.surface.unknowns),
                      len(tgt_enc.surface.unknowns)))
+                encoded[group].append((src_enc, tgt_enc))
             # pad and concatenate groups
             for (group, pairs) in enumerate(encoded):
                 srcs, tgts = zip(*pairs)
                 padded_src = self.src_encoder.pad_sentences(srcs)
                 padded_tgt = self.tgt_encoder.pad_sentences(tgts)
                 # save encoded and padded data
-                np.savez_compressed(
-                    self.file_fmt.format(
-                        corpus=self.corpus,
-                        shard=shard,
-                        group=group),
-                    src=padded_src,
-                    tgt=padded_tgt)
+                group_file_name = self.file_fmt.format(
+                    corpus=self.corpus,
+                    shard=shard,
+                    group=group)
+                with open(group_file_name, 'w') as fobj:
+                    pickle.dump([padded_src, padded_tgt],
+                                protocol=HIGHEST_PROTOCOL)
         # save encoders and stats
+        self.line_statistics = dict(itertools.groupby(
+            sorted(self.line_statistics, key=lambda x: x.shard),
+            lambda x: x.shard))
         with open(vocab_file_fmt.format(corpus=self.corpus), 'w') as fobj:
             pickle.dump(
-                [self.src_encoder, self.tgt_encoder, self.line_statistics])
+                [corpus, self.file_fmt, self.src_encoder, self.tgt_encoder,
+                 self.line_statistics, self.n_groups],
+                protocol=HIGHEST_PROTOCOL)
 
+
+def iterate_sharded_data(vocab_file):
+    corpus, file_fmt, src_encoder, tgt_encoder, line_statistics, n_groups = \
+        pickle.loads(vocab_file)
+    while True:
+        shards = line_statistics.keys()
+        random.shuffle(shards)
+        for shard in shards:
+            # load in the data of the shard
+            groups = [pickle.load(file_fmt.format(
+                                  corpus=corpus,
+                                  shard=shard,
+                                  group=group)
+                      for group in range(n_groups)]
+            # randomize indices belonging to shard
+            lines = list(line_statistics[shard])
+            random.shuffle(lines)
+            # build minibatches group-wise
+            minibatches = [list() for _ in range(n_groups)]
+            for line in lines:
+                # FIXME
+                # if group would become overfull according to budget
+                #   instantiate mb (indexing into full padding group tensor)
+                #   yield it and start a new one
+                # otherwise extend the minibatch
+                minibatches[line.group].append(line)
+            for mb in minibatches:
+                # FIXME yield the unfinished minibatches
+                pass
 
 def safe_zip(*iterables):
     iters = [iter(x) for x in iterables]
