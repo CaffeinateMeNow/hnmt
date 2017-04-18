@@ -23,19 +23,24 @@ class TextEncoder(object):
         self.sub_encoder = sub_encoder
         self.special = special
 
-        if vocab is not None:
-            self.vocab = vocab
+        if isinstance(vocab, (list, tuple)):
+            self.vocab = tuple(vocab)
         else:
             if sequences is not None:
                 c = Counter(x for xs in sequences for x in xs)
-                if max_vocab is not None:
-                    self.vocab = special + tuple(
-                            s for s,_ in c.most_common(max_vocab))
-                elif min_count is not None:
-                    self.vocab = special + tuple(
-                            s for s,n in c.items() if n >= min_count)
-                else:
-                    self.vocab = special + tuple(c.keys())
+            elif isinstance(vocab, Counter):
+                # a Counter can now be given as vocab argument
+                c = vocab
+            else:
+                raise Exception('No vocabulary given')
+            if max_vocab is not None:
+                self.vocab = special + tuple(
+                        s for s,_ in c.most_common(max_vocab))
+            elif min_count is not None:
+                self.vocab = special + tuple(
+                        s for s,n in c.items() if n >= min_count)
+            else:
+                self.vocab = special + tuple(c.keys())
 
         self.index = {s:i for i,s in enumerate(self.vocab)}
 

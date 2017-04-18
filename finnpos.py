@@ -80,6 +80,7 @@ class LogFreqEncoder(object):
         self.use_boundaries = use_boundaries
 
         if vocab is not None:
+            # vocab should be a Counter or similar
             self.vocab = vocab
         else:
             if sequences is not None:
