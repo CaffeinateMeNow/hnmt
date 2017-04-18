@@ -2,6 +2,7 @@ import collections
 import itertools
 import numpy as np
 import random
+import cPickle as pickle
 
 LineLengths = collections.namedtuple('LineLengths',
     ['idx', 'src_len', 'tgt_len'])
@@ -42,6 +43,7 @@ class LeafNode(object):
 
 class ShardedData(object):
     def __init__(self,
+                 corpus,
                  src_lines,
                  tgt_lines,
                  src_encoder,
@@ -50,7 +52,10 @@ class ShardedData(object):
                  tgt_max_len=600,
                  min_lines_per_group=128,
                  max_lines_per_shard=1000000,
-                 min_saved_padding=2048):
+                 min_saved_padding=2048,
+                 file_fmt='{corpus}.shard{shard:03}.group{group:03}.npz',
+                 vocab_file_fmt='{corpus}.vocab.pickle'):
+        self.corpus = corpus
         # callables, yielding tokenized lines
         self.src_lines = src_lines
         self.tgt_lines = tgt_lines
@@ -161,13 +166,24 @@ class ShardedData(object):
                     (line.idx, shard, group,
                      line.src_len, line.tgt_len,
                      len(src_enc.surface.unknowns),
-                     len(trg_enc.surface.unknowns)))
+                     len(tgt_enc.surface.unknowns)))
             # pad and concatenate groups
             for (group, pairs) in enumerate(encoded):
                 srcs, tgts = zip(*pairs)
                 padded_src = self.src_encoder.pad_sentences(srcs)
-                padded_trg = self.trg_encoder.pad_sentences(trgs)
-                # FIXME save encoded data
+                padded_tgt = self.tgt_encoder.pad_sentences(tgts)
+                # save encoded and padded data
+                np.savez_compressed(
+                    self.file_fmt.format(
+                        corpus=self.corpus,
+                        shard=shard,
+                        group=group),
+                    src=padded_src,
+                    tgt=padded_tgt)
+        # save encoders and stats
+        with open(vocab_file_fmt.format(corpus=self.corpus), 'w') as fobj:
+            pickle.dump(
+                [self.src_encoder, self.tgt_encoder, self.line_statistics])
 
 
 def safe_zip(*iterables):
