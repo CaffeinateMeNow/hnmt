@@ -67,6 +67,8 @@ class ShardedData(object):
         self.min_lines_per_group = min_lines_per_group
         self.max_lines_per_shard = max_lines_per_shard
         self.min_saved_padding = min_saved_padding
+        self.file_fmt = file_fmt
+        self.vocab_file_fmt = vocab_file_fmt
         # first LineLengths
         self.line_lens = []
         # later LineStatistics
@@ -151,12 +153,12 @@ class ShardedData(object):
             # one pass over the data per shard
             for (i, (src, tgt)) in enumerate(safe_zip(self.src_lines(),
                                                       self.tgt_lines())):
-                stats = lines_in_shard.get(i, None)
-                if stats is None:
+                line = lines_in_shard.get(i, None)
+                if line is None:
                     # drops too long and lines belonging to other shards
                     continue
                 # choose padding group by lengths
-                group = self.padding_group_thresholds.decide(stats)
+                group = self.padding_group_thresholds.decide(line)
                 # encode
                 src_enc = self.src_encoder.encode(src)
                 tgt_enc = self.tgt_encoder.encode(tgt)
@@ -179,19 +181,19 @@ class ShardedData(object):
                     group=group)
                 with open(group_file_name, 'w') as fobj:
                     pickle.dump([padded_src, padded_tgt],
-                                protocol=HIGHEST_PROTOCOL)
+                                protocol=pickle.HIGHEST_PROTOCOL)
         # save encoders and stats
         self.line_statistics = dict(itertools.groupby(
             sorted(self.line_statistics, key=lambda x: x.shard),
             lambda x: x.shard))
-        with open(vocab_file_fmt.format(corpus=self.corpus), 'w') as fobj:
+        with open(self.vocab_file_fmt.format(corpus=self.corpus), 'w') as fobj:
             pickle.dump(
-                [corpus, self.file_fmt, self.src_encoder, self.tgt_encoder,
+                [self.corpus, self.file_fmt, self.src_encoder, self.tgt_encoder,
                  self.line_statistics, self.n_groups],
-                protocol=HIGHEST_PROTOCOL)
+                protocol=pickle.HIGHEST_PROTOCOL)
 
 
-def iterate_sharded_data(vocab_file):
+def iterate_sharded_data(vocab_file, budget_func):
     corpus, file_fmt, src_encoder, tgt_encoder, line_statistics, n_groups = \
         pickle.loads(vocab_file)
     while True:
@@ -202,7 +204,7 @@ def iterate_sharded_data(vocab_file):
             groups = [pickle.load(file_fmt.format(
                                   corpus=corpus,
                                   shard=shard,
-                                  group=group)
+                                  group=group))
                       for group in range(n_groups)]
             # randomize indices belonging to shard
             lines = list(line_statistics[shard])
@@ -210,15 +212,26 @@ def iterate_sharded_data(vocab_file):
             # build minibatches group-wise
             minibatches = [list() for _ in range(n_groups)]
             for line in lines:
-                # FIXME
-                # if group would become overfull according to budget
-                #   instantiate mb (indexing into full padding group tensor)
-                #   yield it and start a new one
+                if budget_func(minibatches[line.group], line):
+                    # group would become overfull according to budget
+                    # instantiate mb (indexing into full padding group tensors)
+                    indices = np.array([line.idx_in_group
+                                        for line in minibatches[line.group]])
+                    src = [m[:, indices] for m in groups[line.group][0]]
+                    tgt = [m[:, indices] for m in groups[line.group][1]]
+                    # yield it and start a new one
+                    yield (src, tgt)
+                    groups[line.group] = []
                 # otherwise extend the minibatch
                 minibatches[line.group].append(line)
-            for mb in minibatches:
-                # FIXME yield the unfinished minibatches
-                pass
+            for (mb, group) in zip(minibatches, groups):
+                # yield the unfinished minibatches
+                indices = np.array([line.idx_in_group for line in mb])
+                src = [m[:, indices] for m in group[0]]
+                tgt = [m[:, indices] for m in group[1]]
+                # yield it and start a new one
+                yield (src, tgt)
+
 
 def safe_zip(*iterables):
     iters = [iter(x) for x in iterables]
