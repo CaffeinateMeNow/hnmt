@@ -17,38 +17,46 @@ class TextEncoder(object):
                  max_vocab=None,
                  min_count=None,
                  vocab=None,
-                 sequences=None,
                  sub_encoder=None,
                  special=('<S>', '</S>', '<UNK>')):
+        self.max_vocab = max_vocab
+        self.min_count = min_count
         self.sub_encoder = sub_encoder
         self.special = special
 
-        if isinstance(vocab, (list, tuple)):
-            self.vocab = tuple(vocab)
+        if isinstance(vocab, Counter):
+            self.vocab = None
+            self.counter = vocab
+        elif vocab is not None:
+            self.vocab = vocab
+            self.counter = None
         else:
-            if sequences is not None:
-                c = Counter(x for xs in sequences for x in xs)
-            elif isinstance(vocab, Counter):
-                # a Counter can now be given as vocab argument
-                c = vocab
-            else:
-                raise Exception('No vocabulary given')
-            if max_vocab is not None:
-                self.vocab = special + tuple(
-                        s for s,_ in c.most_common(max_vocab))
+            self.vocab = None
+            self.counter = Counter()
+
+    def done(self):
+        if self.vocab is None:
+            if self.max_vocab is not None:
+                self.vocab = self.special + tuple(
+                        s for s,_ in self.counter.most_common(self.max_vocab))
             elif min_count is not None:
-                self.vocab = special + tuple(
-                        s for s,n in c.items() if n >= min_count)
+                self.vocab = self.special + tuple(
+                        s for s,n in self.counter.items() if n >= self.min_count)
             else:
-                self.vocab = special + tuple(c.keys())
+                self.vocab = self.special + tuple(self.counter.keys())
+            self.counter = None
 
         self.index = {s:i for i,s in enumerate(self.vocab)}
 
+    def fields(self):
+        return ('surface', len(self))
+
     def __str__(self):
         if self.sub_encoder is None:
-            return 'TextEncoder(%d)' % len(self)
+            return '{}({})'.format(self.__class__.__name__, len(self))
         else:
-            return 'TextEncoder(%d, %s)' % (len(self), str(self.sub_encoder))
+            return '{}({}, {})'.format(self.__class__.__name__,
+                                       len(self), str(self.sub_encoder))
 
     def __repr__(self):
         return str(self)

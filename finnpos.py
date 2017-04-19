@@ -53,7 +53,6 @@ def finnpos_reader(filename):
 class LogFreqEncoder(object):
     def __init__(self,
                  vocab=None,
-                 sequences=None,
                  use_boundaries=True):
         self.use_boundaries = use_boundaries
 
@@ -61,13 +60,24 @@ class LogFreqEncoder(object):
             # vocab should be a Counter or similar
             self.vocab = vocab
         else:
-            if sequences is not None:
-                self.vocab = Counter(x for xs in sequences for x in xs)
+            self.vocab = Counter()
+
+    def count(self, sequence):
+        for lemma in sequence:
+            self.vocab[lemma] += 1
+
+    def done(self):
+        # note that vocabulary is intentionally not truncated
+        # this keeps actual frequencies of rare lemmas
+        # but the softmax doesn't get any bigger
         mostfreq, _ = self.vocab.most_common(1)[0]
         self.max_val = self[mostfreq]
 
+    def fields(self):
+        return ('logf', len(self))
+
     def __str__(self):
-        return 'LogFreqEncoder(%d)' % len(self)
+        return '{}({})'.format(self.__class__.__name__, len(self))
 
     def __repr__(self):
         return str(self)
