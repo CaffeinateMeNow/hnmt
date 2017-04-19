@@ -1045,11 +1045,8 @@ def main():
                     config['target_tokenizer'])
 
     def monitor(translate_src, translate_trg):
-        for i in range(0, len(translate_src), config['batch_size']):
-            batch_sents = translate_src[i:i+config['batch_size']]
-            x = config['src_encoder'].pad_sequences(batch_sents)
             sentences, auxes = model.search(
-                    *(x + (config['max_target_length'],)),
+                    *(translate_src + (config['max_target_length'],)),
                     beam_size=config['beam_size'],
                     alpha=config['alpha'],
                     beta=config['beta'],
@@ -1127,13 +1124,15 @@ def main():
             outf.close()
     else:
         # encoding "test" set in advance
-        # FIXME one minibatch is NOT enough: validate should use whole set
-        test_src_sents = test_src_sents[:config['batch_size']]
-        test_trg_finnpos = test_trg_finnpos[:config['batch_size']]
-        test_src = src_encoder.pad_sequences(
-            [src_encoder.encode_sequence(sent) for sent in test_src_sents])
-        test_trg = trg_encoder.pad_sequences(
-            [trg_encoder.encode_sequence(sent) for sent in test_trg_finnpos])
+        test_batches = []
+        while len(test_src_sents) > 0:
+            test_src, test_src_sents = test_src_sents[:config['batch_size']], test_src_sents[config['batch_size']:]
+            test_trg, test_trg_finnpos = test_trg_finnpos[:config['batch_size']], test_trg_finnpos[config['batch_size']:]
+            test_src = src_encoder.pad_sequences(
+                [src_encoder.encode_sequence(sent) for sent in test_src])
+            test_trg = trg_encoder.pad_sequences(
+                [trg_encoder.encode_sequence(sent) for sent in test_trg])
+            test_batches.append(test_src, test_trg)
 
         logf = None
         if args.log_file:
@@ -1161,13 +1160,12 @@ def main():
             x_weight=x_weight,
             unk_weight=unk_weight)
 
-        def validate(test_pairs, start_time, optimizer, logf, sent_nr):
+        def validate(test_batches, start_time, optimizer, logf, sent_nr):
             result = 0.
             att_result = 0.
             t0 = time()
-            for batch_pairs in iterate_batches(
-                    test_pairs, config['batch_size']):
-                test_x, test_y = batch_pairs
+            for batch in test_batches:
+                test_x, test_y = batch
                 test_outputs = test_y[0]
                 test_outputs_mask = test_y[1]
                 test_xent, test_xent_attention = model.xent_fun(
@@ -1186,10 +1184,6 @@ def main():
                 file=logf, flush=True)
             return result
 
-        # only translate one minibatch for monitoring
-        translate_src = test_src[:config['batch_size']]
-        translate_trg = test_trg[:config['batch_size']]
-
         while time() < end_time:
             # Sort by combined sequence length when grouping training instances
             # into batches.
@@ -1201,7 +1195,7 @@ def main():
                     n_groups,
                     budget_func):
                 if logf and batch_nr % config['test_every'] == 0:
-                    validate(test_pairs, start_time, optimizer, logf, sent_nr)
+                    validate(test_batches, start_time, optimizer, logf, sent_nr)
 
                 sent_nr += len(batch_pairs)
 
@@ -1239,7 +1233,7 @@ def main():
 
                 if batch_nr % config['translate_every'] == 0 and not n_test_sents == 0:
                     t0 = time()
-                    monitor(translate_src, translate_trg)
+                    monitor(*test_batches[0])
                     print('Translation finished: %.2f s' % (time()-t0),
                           flush=True)
 
