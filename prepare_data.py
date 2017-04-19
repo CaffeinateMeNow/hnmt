@@ -133,7 +133,8 @@ class ShardedData(object):
         if savings[mid] < self.min_saved_padding:
             # savings are not big enough
             split_ok = False
-        if min(mid, len(lens) - mid) < self.min_lines_per_group:
+        # size limit is average over shards, doesn't guarantee limit
+        if min(mid, len(lens) - mid) < self.min_lines_per_group * self.n_shards:
             # too small group
             split_ok = False
         print('mid {} of len {} is {} (limit {})'.format(mid, len(lens), split_ok, self.min_lines_per_group))
