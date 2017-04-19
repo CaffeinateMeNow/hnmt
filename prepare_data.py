@@ -4,20 +4,23 @@ import numpy as np
 import random
 import cPickle as pickle
 
+from finnpos import *
+from utils import *
+
 LineLengths = collections.namedtuple('LineLengths',
-    ['idx', 'src_len', 'tgt_len'])
+    ['idx', 'src_len', 'trg_len'])
 LineStatistics = collections.namedtuple('LineStatistics',
-    ['idx', 'shard', 'group', 'idx_in_group', 'src_len', 'tgt_len', 'src_unks', 'tgt_unks'])
+    ['idx', 'shard', 'group', 'idx_in_group', 'src_len', 'trg_len', 'src_unks', 'trg_unks'])
 
 class SplitNode(object):
-    def __init__(self, threshold, left, right, tgt=False):
+    def __init__(self, threshold, left, right, trg=False):
         self.threshold = threshold
         self.left = left
         self.right = right
-        self.tgt = tgt
+        self.trg = trg
 
     def decide(self, linelens):
-        val = linelens.tgt_len if self.tgt else linelens.src_len
+        val = linelens.trg_len if self.trg else linelens.src_len
         if val < self.threshold:
             return self.left.decide(linelens)
         else:
@@ -25,7 +28,7 @@ class SplitNode(object):
 
     def __repr__(self):
         return 'S({}:{}, {}, {})'.format(
-            'tgt' if self.tgt else 'src',
+            'trg' if self.trg else 'src',
             self.threshold,
             repr(self.left),
             repr(self.right))
@@ -45,11 +48,11 @@ class ShardedData(object):
     def __init__(self,
                  corpus,
                  src_lines,
-                 tgt_lines,
+                 trg_lines,
                  src_encoder,
-                 tgt_encoder,
+                 trg_encoder,
                  src_max_len=600,
-                 tgt_max_len=600,
+                 trg_max_len=600,
                  max_lines_per_shard=1000000,
                  min_lines_per_group=128,
                  min_saved_padding=2048,
@@ -58,12 +61,12 @@ class ShardedData(object):
         self.corpus = corpus
         # callables, yielding tokenized lines
         self.src_lines = src_lines
-        self.tgt_lines = tgt_lines
+        self.trg_lines = trg_lines
         # single new-style encoder per side
         self.src_encoder = src_encoder
-        self.tgt_encoder = tgt_encoder
+        self.trg_encoder = trg_encoder
         self.src_max_len = src_max_len
-        self.tgt_max_len = tgt_max_len
+        self.trg_max_len = trg_max_len
         self.min_lines_per_group = min_lines_per_group
         self.max_lines_per_shard = max_lines_per_shard
         self.min_saved_padding = min_saved_padding
@@ -85,35 +88,35 @@ class ShardedData(object):
 
     def collect_statistics(self):
         # first pass
-        for (i, (src, tgt)) in enumerate(safe_zip(self.src_lines(),
-                                                  self.tgt_lines())):
+        for (i, (src, trg)) in enumerate(safe_zip(self.src_lines(),
+                                                  self.trg_lines())):
             src_len = len(src.surface)
-            tgt_len = len(tgt.surface)
+            trg_len = len(trg.surface)
             # filter out too long lines
             if src_len > self.src_max_len:
                 continue
-            if tgt_len > self.tgt_max_len:
+            if trg_len > self.trg_max_len:
                 continue
             # total line count => shard sizes/num
             # length distribution => thresholds for padding groups
-            self.line_lens.append(LineLengths(i, src_len, tgt_len))
+            self.line_lens.append(LineLengths(i, src_len, trg_len))
             # token counts => vocabulary index (encoder)
             self.src_encoder.count(src)
-            self.tgt_encoder.count(tgt)
+            self.trg_encoder.count(trg)
         # preassign sentences to shards by random draw without replacement
         self.n_shards = int(np.ceil(len(self.line_lens) / self.max_lines_per_shard))
         lines_per_shard = int(np.ceil(len(self.line_lens) / self.n_shards))
         self.shard_indices = [j for i in range(self.n_shards) for j in [i] * lines_per_shard]
         random.shuffle(self.shard_indices)
         # choose thresholds for padding groups
-        self.padding_group_thresholds = self.choose_thresholds(self.line_lens, tgt=False)
+        self.padding_group_thresholds = self.choose_thresholds(self.line_lens, trg=False)
         # decide vocabularies for encoders
         self.src_encoder.done()
-        self.tgt_encoder.done()
+        self.trg_encoder.done()
 
-    def choose_thresholds(self, lines, tgt):
-        if tgt:
-            lenfunc = lambda x: x.tgt_len
+    def choose_thresholds(self, lines, trg):
+        if trg:
+            lenfunc = lambda x: x.trg_len
         else:
             lenfunc = lambda x: x.src_len
         # sort lengths
@@ -133,9 +136,9 @@ class ShardedData(object):
             split_ok = False
         if split_ok:
             threshold = lens[mid]
-            left = self.choose_thresholds(lines[:mid], not tgt)
-            right = self.choose_thresholds(lines[mid:], not tgt)
-            return SplitNode(threshold, left, right, tgt)
+            left = self.choose_thresholds(lines[:mid], not trg)
+            right = self.choose_thresholds(lines[mid:], not trg)
+            return SplitNode(threshold, left, right, trg)
         else:
             leaf = LeafNode(self.n_groups)
             self.n_groups += 1
@@ -151,8 +154,8 @@ class ShardedData(object):
                               if sid == shard}
             encoded = [list() for _ in range(self.n_groups)]
             # one pass over the data per shard
-            for (i, (src, tgt)) in enumerate(safe_zip(self.src_lines(),
-                                                      self.tgt_lines())):
+            for (i, (src, trg)) in enumerate(safe_zip(self.src_lines(),
+                                                      self.trg_lines())):
                 line = lines_in_shard.get(i, None)
                 if line is None:
                     # drops too long and lines belonging to other shards
@@ -160,27 +163,27 @@ class ShardedData(object):
                 # choose padding group by lengths
                 group = self.padding_group_thresholds.decide(line)
                 # encode
-                src_enc = self.src_encoder.encode(src)
-                tgt_enc = self.tgt_encoder.encode(tgt)
+                src_enc = self.src_encoder.encode_sequence(src)
+                trg_enc = self.trg_encoder.encode_sequence(trg)
                 # also track number of unks
                 self.line_statistics.append(LineStatistics
                     (line.idx, shard, group, len(encoded[group]),
-                     line.src_len, line.tgt_len,
+                     line.src_len, line.trg_len,
                      len(src_enc.surface.unknowns),
-                     len(tgt_enc.surface.unknowns)))
-                encoded[group].append((src_enc, tgt_enc))
+                     len(trg_enc.surface.unknowns)))
+                encoded[group].append((src_enc, trg_enc))
             # pad and concatenate groups
             for (group, pairs) in enumerate(encoded):
-                srcs, tgts = zip(*pairs)
-                padded_src = self.src_encoder.pad_sentences(srcs)
-                padded_tgt = self.tgt_encoder.pad_sentences(tgts)
+                srcs, trgs = zip(*pairs)
+                padded_src = self.src_encoder.pad_sequences(srcs)
+                padded_trg = self.trg_encoder.pad_sequences(trgs)
                 # save encoded and padded data
                 group_file_name = self.file_fmt.format(
                     corpus=self.corpus,
                     shard=shard,
                     group=group)
                 with open(group_file_name, 'w') as fobj:
-                    pickle.dump([padded_src, padded_tgt],
+                    pickle.dump([padded_src, padded_trg],
                                 protocol=pickle.HIGHEST_PROTOCOL)
         # save encoders and stats
         self.line_statistics = dict(itertools.groupby(
@@ -188,13 +191,13 @@ class ShardedData(object):
             lambda x: x.shard))
         with open(self.vocab_file_fmt.format(corpus=self.corpus), 'w') as fobj:
             pickle.dump(
-                [self.corpus, self.file_fmt, self.src_encoder, self.tgt_encoder,
+                [self.corpus, self.file_fmt, self.src_encoder, self.trg_encoder,
                  self.line_statistics, self.n_groups],
                 protocol=pickle.HIGHEST_PROTOCOL)
 
 
 def iterate_sharded_data(vocab_file, budget_func):
-    corpus, file_fmt, src_encoder, tgt_encoder, line_statistics, n_groups = \
+    corpus, file_fmt, src_encoder, trg_encoder, line_statistics, n_groups = \
         pickle.loads(vocab_file)
     while True:
         shards = line_statistics.keys()
@@ -218,9 +221,9 @@ def iterate_sharded_data(vocab_file, budget_func):
                     indices = np.array([line.idx_in_group
                                         for line in minibatches[line.group]])
                     src = [m[:, indices] for m in groups[line.group][0]]
-                    tgt = [m[:, indices] for m in groups[line.group][1]]
+                    trg = [m[:, indices] for m in groups[line.group][1]]
                     # yield it and start a new one
-                    yield (src, tgt)
+                    yield (src, trg)
                     groups[line.group] = []
                 # otherwise extend the minibatch
                 minibatches[line.group].append(line)
@@ -228,20 +231,9 @@ def iterate_sharded_data(vocab_file, budget_func):
                 # yield the unfinished minibatches
                 indices = np.array([line.idx_in_group for line in mb])
                 src = [m[:, indices] for m in group[0]]
-                tgt = [m[:, indices] for m in group[1]]
+                trg = [m[:, indices] for m in group[1]]
                 # yield it and start a new one
-                yield (src, tgt)
-
-
-def safe_zip(*iterables):
-    iters = [iter(x) for x in iterables]
-    sentinel = object()
-    for (j, tpl) in enumerate(itertools.zip_longest(*iterables, fillvalue=sentinel)):
-        for (i, val) in enumerate(tpl):
-            if val is sentinel:
-                raise ValueError('Column {} was too short. '
-                    'Row {} (and later) missing.'.format(i, j))
-        yield tpl
+                yield (src, trg)
 
 
 def main():
@@ -313,45 +305,68 @@ def main():
                  help='Template string for vocabulary file name. '
                  'Use {corpus}.')
 
-        # reusable readers for input files
-        # FIXME
 
         # type of encoders depends on format
         if args.source_format == 'char':
+            src_reader = tokenize(args.source, 'char', False)
             # TextEncoder from all chars
-            raise NotImplementedError()
+            src_encoder = TextEncoder(
+                #sequences=[token for sent in src_reader() for token in sent],
+                min_count=args.min_char_count)
         elif args.source_format == 'hybrid':
-            # TextEncoder from all words
-            # subbed TextEncoder for the chars
-            # FIXME
+            src_reader = tokenize(args.source, 'space', False)
+            src_char_encoder = TextEncoder(
+                #sequences=[token for sent in src_reader() for token in sent],
+                min_count=args.min_char_count,
+                special=())
+            src_encoder = TextEncoder(
+                #sequences=src_reader(),
+                max_vocab=args.source_vocabulary,
+                sub_encoder=src_char_encoder)
         elif args.source_format == 'finnpos':
+            src_reader = finnpos_reader(args.source)
             # FinnposEncoder does the lot
-            # FIXME
+            src_encoder = FinnposEncoder(
+                #sequences=src_reader(),
+                max_vocab=args.source_vocabulary,
+                max_lemma_vocab=args.lemma_vocabulary)
 
-        #src_char_encoder = TextEncoder(
-        #        sequences=[token for sent in src_sents for token in sent],
-        #        min_count=args.min_char_count,
-        #        special=())
-        #src_encoder = TextEncoder(
-        #        sequences=src_sents,
-        #        max_vocab=args.source_vocabulary,
-        #        sub_encoder=src_char_encoder)
-        #trg_char_encoder = TextEncoder(
-        #        sequences=[token for sent in trg_finnpos for token in sent.sequence],
-        #        min_count=args.min_char_count)
-        #trg_encoder = TwoThresholdTextEncoder(
-        #        sequences=[sent.sequence for sent in trg_finnpos],
-        #        max_vocab=args.target_vocabulary,
-        #        low_thresh=args.hybrid_extra_char_threshold,
-        #        sub_encoder=trg_char_encoder,
-        #        special=(('<S>', '</S>')
-        #                    if config['target_tokenizer'] == 'char'
-        #                    else ('<S>', '</S>', '<UNK>')))
+        if args.target_format == 'char':
+            trg_reader = tokenize(args.target, 'char', False)
+            # TextEncoder from all chars
+            trg_encoder = TextEncoder(
+                #sequences=[token for sent in trg_reader() for token in sent],
+                min_count=args.min_char_count)
+        elif args.target_format == 'hybrid':
+            trg_reader = tokenize(args.target, 'space', False)
+            trg_char_encoder = TextEncoder(
+                #sequences=[token for sent in trg_reader() for token in sent],
+                min_count=args.min_char_count,
+                special=())
+            if args.hybrid_vocabulary_overlap <= 0:
+                trg_encoder = TextEncoder(
+                    #sequences=trg_reader(),
+                    max_vocab=args.target_vocabulary,
+                    sub_encoder=trg_char_encoder)
+            else:
+                trg_encoder = TwoThresholdTextEncoder(
+                    #sequences=trg_reader(),
+                    max_vocab=args.target_vocabulary,
+                    overlap=args.hybrid_vocabulary_overlap,
+                    sub_encoder=trg_char_encoder)
+        elif args.target_format == 'finnpos':
+            trg_reader = finnpos_reader(args.target)
+            # FinnposEncoder does the lot
+            trg_encoder = FinnposEncoder(
+                #sequences=trg_reader(),
+                max_vocab=args.target_vocabulary,
+                max_lemma_vocab=args.lemma_vocabulary,
+                overlap=args.hybrid_vocabulary_overlap)
 
         sharded = ShardedData(
             args.corpus,
             src_reader,
-            tgt_reader,
+            trg_reader,
             src_encoder,
             trg_encoder,
             max_lines_per_shard=args.max_lines_per_shard,
