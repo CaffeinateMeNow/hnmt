@@ -49,31 +49,6 @@ def finnpos_reader(filename):
             raw.append(line.split('\t'))
     return reader
 
-def pad_aux(encoded_sequences, length,
-            pad_right=True, dtype=np.int32):
-    """
-    arguments:
-        encoded_sequences -- a list of Aux tuples
-    """
-    n_batch = max(1, len(encoded_sequences))
-    out = Aux(*[
-        np.zeros((length, n_batch), dtype=dtype)
-        for _ in Aux._fields])
-
-    if not encoded_sequences:
-        # An empty matrix would mess up things, so create a dummy 1x1
-        # matrix with an empty mask in case the sequence list is empty.
-        return out
-
-    for i,tpl in enumerate(encoded_sequences):
-        for j,encoded in enumerate(tpl):
-            encoded = encoded.sequence      # throw away empty unknowns
-            if pad_right:
-                out[j][:len(encoded),i] = encoded
-            else:
-                out[j][-len(encoded):,i] = encoded
-    return out
-
 
 class LogFreqEncoder(object):
     def __init__(self,
@@ -190,15 +165,17 @@ class FinnposEncoder(object):
             subenc.done()
 
     def fields(self):
-        ('surface', len(self.subencoders['surface'])),
-        ('logf',    len(self.subencoders['logf'])),
-        ('lemma',   len(self.subencoders['lemma'])),
-        ('pos',     len(self.subencoders['pos'])),
-        ('num',     len(self.subencoders['num'])),
-        ('case',    len(self.subencoders['case'])),
-        ('pers',    len(self.subencoders['pers'])),
-        ('mood',    len(self.subencoders['mood'])),
-        ('tense',   len(self.subencoders['tense'])),
+        return (
+            ('surface', len(self.subencoders['surface'])),
+            ('logf',    len(self.subencoders['logf'])),
+            ('lemma',   len(self.subencoders['lemma'])),
+            ('pos',     len(self.subencoders['pos'])),
+            ('num',     len(self.subencoders['num'])),
+            ('case',    len(self.subencoders['case'])),
+            ('pers',    len(self.subencoders['pers'])),
+            ('mood',    len(self.subencoders['mood'])),
+            ('tense',   len(self.subencoders['tense'])),
+            )
 
     def __str__(self):
         return '{}({})'.format(self.__class__.__name__, len(self))
@@ -213,49 +190,55 @@ class FinnposEncoder(object):
         # length of main vocabulary
         return len(self.subencoders['surface'])
 
-# FIXME: WIP
-    def encode_sequence(self, sequence, max_length=None, dtype=np.int32):
-        start = (0,) if self.use_boundaries else ()
-        stop = (0,) if self.use_boundaries else ()
-        encoded = tuple(self[symbol] for symbol in sequence)
-        if max_length is None \
-        or len(encoded)+len(start)+len(stop) <= max_length:
-            out = start + encoded + stop
-        else:
-            out = start + encoded[:max_length-(len(start)+len(stop))] + stop
-        return Encoded(np.asarray(out, dtype=dtype), None)
+    def encode_sequence(self, fields, max_length=None, dtype=np.int32):
+        surf = self.subencoders['surface'].encode_sequence(fields.surface,
+             max_length=max_length, dtype=dtype)
+        logf = self.subencoders['logf'].encode_sequence(fields.lemma,
+             max_length=max_length, dtype=dtype)
+        lemma = self.subencoders['lemma'].encode_sequence(fields.lemma,
+             max_length=max_length, dtype=dtype)
+        pos = self.subencoders['pos'].encode_sequence(fields.pos,
+             max_length=max_length, dtype=dtype)
+        num = self.subencoders['num'].encode_sequence(fields.num,
+             max_length=max_length, dtype=dtype)
+        case = self.subencoders['case'].encode_sequence(fields.case,
+             max_length=max_length, dtype=dtype)
+        pers = self.subencoders['pers'].encode_sequence(fields.pers,
+             max_length=max_length, dtype=dtype)
+        mood = self.subencoders['mood'].encode_sequence(fields.mood,
+             max_length=max_length, dtype=dtype)
+        tense = self.subencoders['tense'].encode_sequence(fields.tense,
+             max_length=max_length, dtype=dtype)
+        return Aux(y, logf, lemma, pos, num, case, pers, mood, tense)
 
-    def pad_sequences(self, sequences,
+    def pad_sequences(self, encoded_sequences,
                       max_length=None, pad_right=True, dtype=np.int32):
-        if not sequences:
-            # An empty matrix would mess up things, so create a dummy 1x1
-            # matrix with an empty mask in case the sequence list is empty.
-            m = np.zeros((1 if max_length is None else max_length, 1),
-                         dtype=dtype)
-            mask = np.zeros_like(m, dtype=np.bool)
-            return m, mask
-        encoded_sequences = [
-                self.encode_sequence(sequence, max_length)
-                for sequence in sequences]
-        length = max(map(len, encoded_sequences))
-        length = length if max_length is None else min(length, max_length)
+        m, mask, char, char_mask = self.subencoders['surface'].pad_sequences(
+            [x.surface for x in encoded_sequences],
+            max_length=max_length, pad_right=pad_right, dtype=dtype)
+        n_batch = m.shape[1]
+        out = Aux(*[
+            np.zeros((length, n_batch), dtype=dtype)
+            for _ in Aux._fields])
 
-        m = np.zeros((length, len(sequences)), dtype=dtype)
-        mask = np.zeros_like(m, dtype=np.bool)
+        for i,tpl in enumerate(encoded_sequences):
+            for j,encoded in enumerate(tpl):
+                encoded = encoded.sequence      # throw away empty unknowns
+                if pad_right:
+                    out[j][:len(encoded),i] = encoded
+                else:
+                    out[j][-len(encoded):,i] = encoded
+        return m, mask, char, char_mask, out
 
-        for i,encoded in enumerate(encoded_sequences):
-            if pad_right:
-                m[:len(encoded),i] = encoded
-                mask[:len(encoded),i] = 1
-            else:
-                m[-len(encoded):,i] = encoded
-                mask[-len(encoded):,i] = 1
-
-        return m, mask
-
-    def decode_sentence(self, encoded, no_boundary=False):
-        seq = encoded.sequence
-        if self.use_boundaries and not no_boundary:
-            seq = seq[1:]
-        #return [str(np.exp(x) - 1) for x in seq]
-        return [str(x) for x in seq]
+    def decode_sentence(self, encoded):
+        return (
+            self.subencoders['surface'].decode_sentence(encoded.surface),
+            self.subencoders['logf'].decode_sentence(encoded.lemma, no_boundary=True),
+            self.subencoders['lemma'].decode_sentence(encoded.lemma),
+            self.subencoders['pos'].decode_sentence(encoded.pos),
+            self.subencoders['num'].decode_sentence(encoded.num),
+            self.subencoders['case'].decode_sentence(encoded.case),
+            self.subencoders['pers'].decode_sentence(encoded.pers),
+            self.subencoders['mood'].decode_sentence(encoded.mood),
+            self.subencoders['tense'].decode_sentence(encoded.tense),
+        )
