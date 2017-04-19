@@ -62,7 +62,9 @@ class LogFreqEncoder(object):
         else:
             self.vocab = Counter()
 
-    def count(self, sequence):
+    def count(self, sequence, raw=False):
+        if not raw:
+            sequence = sequence.lemma
         for lemma in sequence:
             self.vocab[lemma] += 1
 
@@ -88,7 +90,7 @@ class LogFreqEncoder(object):
     def __len__(self):
         return self.max_val + 1
 
-    def encode_sequence(self, sequence, max_length=None, dtype=np.int32):
+    def encode_sequence(self, sequence, max_length=None, dtype=np.int32, raw=True):
         start = (0,) if self.use_boundaries else ()
         stop = (0,) if self.use_boundaries else ()
         encoded = tuple(self[symbol] for symbol in sequence)
@@ -159,16 +161,16 @@ class FinnposEncoder(object):
             'mood': TextEncoder(),
             'tense': TextEncoder()}
 
-    def count(self, tpl):
-        self.subencoders['surface'].count(tpl.surface)
-        self.subencoders['logf'].count(tpl.lemma)
-        self.subencoders['lemma'].count(tpl.lemma)
-        self.subencoders['pos'].count(tpl.pos)
-        self.subencoders['num'].count(tpl.num)
-        self.subencoders['case'].count(tpl.case)
-        self.subencoders['pers'].count(tpl.pers)
-        self.subencoders['mood'].count(tpl.mood)
-        self.subencoders['tense'].count(tpl.tense)
+    def count(self, tpl, raw=False):
+        self.subencoders['surface'].count(tpl.surface, raw=True)
+        self.subencoders['logf'].count(tpl.lemma, raw=True)
+        self.subencoders['lemma'].count(tpl.lemma, raw=True)
+        self.subencoders['pos'].count(tpl.pos, raw=True)
+        self.subencoders['num'].count(tpl.num, raw=True)
+        self.subencoders['case'].count(tpl.case, raw=True)
+        self.subencoders['pers'].count(tpl.pers, raw=True)
+        self.subencoders['mood'].count(tpl.mood, raw=True)
+        self.subencoders['tense'].count(tpl.tense, raw=True)
 
     def done(self):
         for subenc in self.subencoders.values():
@@ -202,23 +204,23 @@ class FinnposEncoder(object):
 
     def encode_sequence(self, fields, max_length=None, dtype=np.int32):
         surf = self.subencoders['surface'].encode_sequence(fields.surface,
-             max_length=max_length, dtype=dtype)
+             max_length=max_length, dtype=dtype, raw=True)
         logf = self.subencoders['logf'].encode_sequence(fields.lemma,
-             max_length=max_length, dtype=dtype)
+             max_length=max_length, dtype=dtype, raw=True)
         lemma = self.subencoders['lemma'].encode_sequence(fields.lemma,
-             max_length=max_length, dtype=dtype)
+             max_length=max_length, dtype=dtype, raw=True)
         pos = self.subencoders['pos'].encode_sequence(fields.pos,
-             max_length=max_length, dtype=dtype)
+             max_length=max_length, dtype=dtype, raw=True)
         num = self.subencoders['num'].encode_sequence(fields.num,
-             max_length=max_length, dtype=dtype)
+             max_length=max_length, dtype=dtype, raw=True)
         case = self.subencoders['case'].encode_sequence(fields.case,
-             max_length=max_length, dtype=dtype)
+             max_length=max_length, dtype=dtype, raw=True)
         pers = self.subencoders['pers'].encode_sequence(fields.pers,
-             max_length=max_length, dtype=dtype)
+             max_length=max_length, dtype=dtype, raw=True)
         mood = self.subencoders['mood'].encode_sequence(fields.mood,
-             max_length=max_length, dtype=dtype)
+             max_length=max_length, dtype=dtype, raw=True)
         tense = self.subencoders['tense'].encode_sequence(fields.tense,
-             max_length=max_length, dtype=dtype)
+             max_length=max_length, dtype=dtype, raw=True)
         return Aux(surf, logf, lemma, pos, num, case, pers, mood, tense)
 
     def pad_sequences(self, encoded_sequences,

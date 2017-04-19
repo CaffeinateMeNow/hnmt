@@ -9,6 +9,7 @@ from collections import Counter, namedtuple
 import numpy as np
 import theano
 from theano import tensor as T
+from utils import *
 
 Encoded = namedtuple('Encoded', ['sequence', 'unknown'])
 
@@ -23,6 +24,7 @@ class TextEncoder(object):
         self.min_count = min_count
         self.sub_encoder = sub_encoder
         self.special = special
+        self.index = None
 
         if isinstance(vocab, Counter):
             self.vocab = None
@@ -34,11 +36,13 @@ class TextEncoder(object):
             self.vocab = None
             self.counter = Counter()
 
-    def count(self, sequence):
+    def count(self, sequence, raw=False):
+        if not raw:
+            sequence = sequence.surface
         for token in sequence:
             self.counter[token] += 1
-            if self.sub_encoder:
-                self.sub_encoder.count(token)
+            if self.sub_encoder is not None:
+                self.sub_encoder.count(token, raw=True)
 
     def done(self):
         if self.vocab is None:
@@ -53,11 +57,15 @@ class TextEncoder(object):
             self.counter = None
 
         self.index = {s:i for i,s in enumerate(self.vocab)}
+        if self.sub_encoder is not None:
+            self.sub_encoder.done()
 
     def fields(self):
         return ('surface', len(self))
 
     def __str__(self):
+        if self.vocab is None:
+            return '{}(uninitialized)'.format(self.__class__.__name__)
         if self.sub_encoder is None:
             return '{}({})'.format(self.__class__.__name__, len(self))
         else:
@@ -73,7 +81,7 @@ class TextEncoder(object):
     def __len__(self):
         return len(self.vocab)
 
-    def encode_sequence(self, sequence, max_length=None, dtype=np.int32):
+    def encode_sequence(self, sequence, max_length=None, dtype=np.int32, raw=False):
         """
         returns:
             an Encoded namedtuple, with the following fields:
@@ -100,14 +108,21 @@ class TextEncoder(object):
                     return -len(unknowns)
             else:
                 return idx
-        encoded = tuple(idx for idx in list(map(encode_item, sequence))
-                        if idx is not None)
+        try:
+            sequence = sequence.surface
+        except AttributeError:
+            pass
+        encoded = tuple(encode_item(x) for x in sequence)
+        encoded = tuple(idx for idx in encoded if idx is not None)
         if max_length is None \
         or len(encoded)+len(start)+len(stop) <= max_length:
             out = start + encoded + stop
         else:
             out = start + encoded[:max_length-(len(start)+len(stop))] + stop
-        return Encoded(np.asarray(out, dtype=dtype), unknowns)
+        out = Encoded(np.asarray(out, dtype=dtype), unknowns)
+        if raw:
+            return out
+        return Surface(out)
 
     def decode_sentence(self, encoded):
         start = self.index.get('<S>')
@@ -131,6 +146,10 @@ class TextEncoder(object):
                          dtype=dtype)
             mask = np.zeros_like(m, dtype=np.bool)
             return m, mask
+        try:
+            encoded_sequences = [x.surface for x in encoded_sequences]
+        except AttributeError:
+            pass
 
         length = max((len(x[0]) for x in encoded_sequences))
         length = length if max_length is None else min(length, max_length)
@@ -205,11 +224,13 @@ class TwoThresholdTextEncoder(TextEncoder):
         self.low_thresh = max(0, len(self) - self.overlap)
 
     def __str__(self):
+        if self.vocab is None:
+            return '{}(uninitialized)'.format(self.__class__.__name__)
         return '{}({}, {}, {})'.format(
             self.__class__.__name__,
             self.low_thresh, len(self), str(self.sub_encoder))
 
-    def encode_sequence(self, sequence, max_length=None, dtype=np.int32):
+    def encode_sequence(self, sequence, max_length=None, dtype=np.int32, raw=False):
         """
         returns:
             an Encoded namedtuple, with the following fields:
@@ -245,7 +266,10 @@ class TwoThresholdTextEncoder(TextEncoder):
             out = start + encoded + stop
         else:
             out = start + encoded[:max_length-(len(start)+len(stop))] + stop
-        return Encoded(np.asarray(out, dtype=dtype), unknowns)
+        out = Encoded(np.asarray(out, dtype=dtype), unknowns)
+        if raw:
+            return out
+        return Surface(out)
 
     def split_unk_outputs(self, outputs, outputs_mask):
         # Compute separate mask for character level (UNK) words

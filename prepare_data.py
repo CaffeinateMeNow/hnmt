@@ -2,7 +2,7 @@ import collections
 import itertools
 import numpy as np
 import random
-import cPickle as pickle
+import pickle
 
 from finnpos import *
 from utils import *
@@ -87,7 +87,7 @@ class ShardedData(object):
         self.encode()
 
     def collect_statistics(self):
-        # first pass
+        print('*** First pass: collecting statistics')
         for (i, (src, trg)) in enumerate(safe_zip(self.src_lines(),
                                                   self.trg_lines())):
             src_len = len(src.surface)
@@ -103,11 +103,13 @@ class ShardedData(object):
             # token counts => vocabulary index (encoder)
             self.src_encoder.count(src)
             self.trg_encoder.count(trg)
+        print('*** pre-assigning sentences to shards')
         # preassign sentences to shards by random draw without replacement
         self.n_shards = int(np.ceil(len(self.line_lens) / self.max_lines_per_shard))
         lines_per_shard = int(np.ceil(len(self.line_lens) / self.n_shards))
         self.shard_indices = [j for i in range(self.n_shards) for j in [i] * lines_per_shard]
         random.shuffle(self.shard_indices)
+        print('*** choosing thresholds')
         # choose thresholds for padding groups
         self.padding_group_thresholds = self.choose_thresholds(self.line_lens, trg=False)
         # decide vocabularies for encoders
@@ -134,6 +136,7 @@ class ShardedData(object):
         if min(mid, len(lens) - mid) < self.min_lines_per_group:
             # too small group
             split_ok = False
+        print('mid {} of len {} is {} (limit {})'.format(mid, len(lens), split_ok, self.min_lines_per_group))
         if split_ok:
             threshold = lens[mid]
             left = self.choose_thresholds(lines[:mid], not trg)
@@ -146,8 +149,9 @@ class ShardedData(object):
 
 
     def encode(self):
-        # second pass
+        print('*** Second pass: collecting statistics')
         for shard in range(self.n_shards):
+            print('** shard: {}'.format(shard))
             lines_in_shard = {line.idx: line 
                               for (line, sid)
                               in zip(self.line_lens, self.shard_indices)
@@ -169,8 +173,8 @@ class ShardedData(object):
                 self.line_statistics.append(LineStatistics
                     (line.idx, shard, group, len(encoded[group]),
                      line.src_len, line.trg_len,
-                     len(src_enc.surface.unknowns),
-                     len(trg_enc.surface.unknowns)))
+                     len(src_enc.surface.unknown),
+                     len(trg_enc.surface.unknown)))
                 encoded[group].append((src_enc, trg_enc))
             # pad and concatenate groups
             for (group, pairs) in enumerate(encoded):
@@ -182,18 +186,25 @@ class ShardedData(object):
                     corpus=self.corpus,
                     shard=shard,
                     group=group)
-                with open(group_file_name, 'w') as fobj:
+                print('saving shard {} group {} with len ({}, {}) in file {}'.format(
+                    shard, group, padded_src[0].shape, padded_trg[0].shape, group_file_name))
+                with open(group_file_name, 'wb') as fobj:
                     pickle.dump([padded_src, padded_trg],
-                                protocol=pickle.HIGHEST_PROTOCOL)
+                                fobj, protocol=pickle.HIGHEST_PROTOCOL)
         # save encoders and stats
-        self.line_statistics = dict(itertools.groupby(
-            sorted(self.line_statistics, key=lambda x: x.shard),
-            lambda x: x.shard))
-        with open(self.vocab_file_fmt.format(corpus=self.corpus), 'w') as fobj:
+        self.line_statistics = dict(
+            (shard, list(lines)) for (shard, lines) in 
+            itertools.groupby(
+                sorted(self.line_statistics, key=lambda x: x.shard),
+                lambda x: x.shard))
+        with open(self.vocab_file_fmt.format(corpus=self.corpus), 'wb') as fobj:
             pickle.dump(
-                [self.corpus, self.file_fmt, self.src_encoder, self.trg_encoder,
-                 self.line_statistics, self.n_groups],
-                protocol=pickle.HIGHEST_PROTOCOL)
+                [self.corpus,
+                 self.file_fmt,
+                 self.src_encoder, self.trg_encoder,
+                 self.line_statistics,
+                 self.n_groups],
+                fobj, protocol=pickle.HIGHEST_PROTOCOL)
 
 
 def iterate_sharded_data(vocab_file, budget_func):
@@ -251,10 +262,10 @@ def main():
         metavar='FILE',
         help='name of target language file')
 
-    parser.add_argument('--source-format', type=str,
+    parser.add_argument('--source-format', type=str, default='hybrid',
             choices=('char', 'hybrid', 'finnpos'),
             help='type of preprocessing for source text')
-    parser.add_argument('--target-format', type=str,
+    parser.add_argument('--target-format', type=str, default='hybrid',
             choices=('char', 'hybrid', 'finnpos'),
             help='type of preprocessing for target text')
     parser.add_argument('--max-source-length', type=int,
@@ -296,14 +307,15 @@ def main():
             metavar='N',
             help='Do not split a padding group if the result would save '
             'less than this number of timesteps of wasted padding.')
-    parser.add_argument('--filenames', type=str,
+    parser.add_argument('--group-filenames', type=str,
                 default='{corpus}.shard{shard:03}.group{group:03}.pickle',
                 help='Template string for sharded file names. '
-                'Use {corpus}, {shard} and {group}.')
-    parser.add_argument('--filenames', type=str,
+                'Use {corpus}, {shard} and {group}. '
+                'default "%(default)s"')
+    parser.add_argument('--vocab-filename', type=str,
                 default='{corpus}.vocab.pickle',
                 help='Template string for vocabulary file name. '
-                'Use {corpus}.')
+                'Use {corpus}. default "%(default)s"')
 
     args = parser.parse_args()
 
@@ -373,6 +385,9 @@ def main():
         max_lines_per_shard=args.max_lines_per_shard,
         min_lines_per_group=args.min_lines_per_group,
         min_saved_padding=args.min_saved_padding,
-        file_fmt=args.file_fmt,
-        vocab_file_fmt=args.vocab_file_fmt)
+        file_fmt=args.group_filenames,
+        vocab_file_fmt=args.vocab_filename)
     sharded.prepare_data()
+
+if __name__ == '__main__':
+    main()
