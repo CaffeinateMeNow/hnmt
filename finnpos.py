@@ -1,5 +1,5 @@
 from collections import Counter, namedtuple
-from text import Encoded
+from text import Encoded, TextEncoder, TwoThresholdTextEncoder 
 from utils import *
 
 import numpy as np
@@ -149,9 +149,9 @@ class FinnposEncoder(object):
             'surface': TwoThresholdTextEncoder(
                 max_vocab=max_vocab,
                 overlap=overlap,
-                sub_encoder=char_encoder)
+                sub_encoder=char_encoder),
             'logf': LogFreqEncoder(),
-            'lemma': TextEncoder(max_vocab=args.lemma_vocabulary),
+            'lemma': TextEncoder(max_vocab=self.max_lemma_vocab),
             'pos': TextEncoder(),
             'num': TextEncoder(),
             'case': TextEncoder(),
@@ -219,13 +219,14 @@ class FinnposEncoder(object):
              max_length=max_length, dtype=dtype)
         tense = self.subencoders['tense'].encode_sequence(fields.tense,
              max_length=max_length, dtype=dtype)
-        return Aux(y, logf, lemma, pos, num, case, pers, mood, tense)
+        return Aux(surf, logf, lemma, pos, num, case, pers, mood, tense)
 
     def pad_sequences(self, encoded_sequences,
                       max_length=None, pad_right=True, dtype=np.int32):
         m, mask, char, char_mask = self.subencoders['surface'].pad_sequences(
             [x.surface for x in encoded_sequences],
             max_length=max_length, pad_right=pad_right, dtype=dtype)
+        length = m.shape[0]
         n_batch = m.shape[1]
         out = Aux(*[
             np.zeros((length, n_batch), dtype=dtype)

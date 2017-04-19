@@ -34,12 +34,18 @@ class TextEncoder(object):
             self.vocab = None
             self.counter = Counter()
 
+    def count(self, sequence):
+        for token in sequence:
+            self.counter[token] += 1
+            if self.sub_encoder:
+                self.sub_encoder.count(token)
+
     def done(self):
         if self.vocab is None:
             if self.max_vocab is not None:
                 self.vocab = self.special + tuple(
                         s for s,_ in self.counter.most_common(self.max_vocab))
-            elif min_count is not None:
+            elif self.min_count is not None:
                 self.vocab = self.special + tuple(
                         s for s,n in self.counter.items() if n >= self.min_count)
             else:
@@ -181,19 +187,26 @@ class TextEncoder(object):
 class TwoThresholdTextEncoder(TextEncoder):
     def __init__(self,
                  max_vocab=None,
+                 min_count=None,
                  vocab=None,
-                 sequences=None,
                  sub_encoder=None,
                  special=('<S>', '</S>', '<UNK>'),
-                 low_thresh=None):
-        super().__init__(max_vocab=max_vocab, vocab=vocab,
-                         sequences=sequences, sub_encoder=sub_encoder,
+                 overlap=0):
+        super().__init__(max_vocab=max_vocab,
+                         min_count=min_count,
+                         vocab=vocab,
+                         sub_encoder=sub_encoder,
                          special=special)
-        self.low_thresh = min(low_thresh + len(special), len(self))
         assert self.sub_encoder is not None
+        self.overlap = overlap
+
+    def done(self):
+        super().done()
+        self.low_thresh = max(0, len(self) - self.overlap)
 
     def __str__(self):
-        return 'TwoThresholdTextEncoder(%d, %d, %s)' % (
+        return '{}({}, {}, {})'.format(
+            self.__class__.__name__,
             self.low_thresh, len(self), str(self.sub_encoder))
 
     def encode_sequence(self, sequence, max_length=None, dtype=np.int32):

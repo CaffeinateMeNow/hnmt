@@ -241,137 +241,138 @@ def main():
     parser = argparse.ArgumentParser(
         description='Prepare data for HNMT')
 
-        parser.add_argument('corpus', type=str,
-            metavar='corpus',
-            help='name of corpus')
-        parser.add_argument('source', type=str,
-            metavar='FILE',
-            help='name of source language file')
-        parser.add_argument('target', type=str,
-            metavar='FILE',
-            help='name of target language file')
+    parser.add_argument('corpus', type=str,
+        metavar='corpus',
+        help='name of corpus')
+    parser.add_argument('source', type=str,
+        metavar='FILE',
+        help='name of source language file')
+    parser.add_argument('target', type=str,
+        metavar='FILE',
+        help='name of target language file')
 
-        parser.add_argument('--source-format', type=str,
-                choices=('char', 'hybrid', 'finnpos'),
-                help='type of preprocessing for source text')
-        parser.add_argument('--target-format', type=str,
-                choices=('char', 'hybrid', 'finnpos'),
-                help='type of preprocessing for target text')
-        parser.add_argument('--max-source-length', type=int,
-                metavar='N',
-                help='maximum length of source sentence (in tokens)')
-        parser.add_argument('--max-target-length', type=int,
-                metavar='N',
-                help='maximum length of target sentence (in tokens)')
-        parser.add_argument('--max-source-word-length', type=int,
-                metavar='N',
-                help='maximum length of source word in chars')
-        parser.add_argument('--max-target-word-length', type=int,
-                metavar='N',
-                help='maximum length of target word in chars')
-        parser.add_argument('--min-char-count', type=int,
-                metavar='N',
-                help='drop all characters with count < N in training data')
-        parser.add_argument('--source-vocabulary', type=int, default=10000,
-                metavar='N',
-                help='maximum size of source word-level vocabulary')
-        parser.add_argument('--target-vocabulary', type=int, default=10000,
-                metavar='N',
-                help='maximum size of target word-level vocabulary')
-        parser.add_argument('--lemma-vocabulary', type=int, default=10000,
-                metavar='N',
-                help='size of lemma vocabulary for aux task')
-        parser.add_argument('--hybrid-vocabulary-overlap', type=int, default=0,
-                metavar='N',
-                help='overlap vocabularies of word and character-level decoder '
-                'during training with all except this number of least frequent words')
-        parser.add_argument('--max-lines-per-shard', type=int, default=1000000,
-                metavar='N',
-                help='Approximate size of the shards, in sentences.')
-        parser.add_argument('--min-lines-per-group', type=int, default=128,
-                metavar='N',
-                help='Do not split a padding group if the result would contain '
-                'less than this number of sentences.')
-        parser.add_argument('--min-saved-padding', type=int, default=2048,
-                metavar='N',
-                help='Do not split a padding group if the result would save '
-                'less than this number of timesteps of wasted padding.')
-        parser.add_argument('--filenames', type=str,
-                 default='{corpus}.shard{shard:03}.group{group:03}.pickle',
-                 help='Template string for sharded file names. '
-                 'Use {corpus}, {shard} and {group}.')
-        parser.add_argument('--filenames', type=str,
-                 default='{corpus}.vocab.pickle'):
-                 help='Template string for vocabulary file name. '
-                 'Use {corpus}.')
+    parser.add_argument('--source-format', type=str,
+            choices=('char', 'hybrid', 'finnpos'),
+            help='type of preprocessing for source text')
+    parser.add_argument('--target-format', type=str,
+            choices=('char', 'hybrid', 'finnpos'),
+            help='type of preprocessing for target text')
+    parser.add_argument('--max-source-length', type=int,
+            metavar='N',
+            help='maximum length of source sentence (in tokens)')
+    parser.add_argument('--max-target-length', type=int,
+            metavar='N',
+            help='maximum length of target sentence (in tokens)')
+    parser.add_argument('--max-source-word-length', type=int,
+            metavar='N',
+            help='maximum length of source word in chars')
+    parser.add_argument('--max-target-word-length', type=int,
+            metavar='N',
+            help='maximum length of target word in chars')
+    parser.add_argument('--min-char-count', type=int,
+            metavar='N',
+            help='drop all characters with count < N in training data')
+    parser.add_argument('--source-vocabulary', type=int, default=10000,
+            metavar='N',
+            help='maximum size of source word-level vocabulary')
+    parser.add_argument('--target-vocabulary', type=int, default=10000,
+            metavar='N',
+            help='maximum size of target word-level vocabulary')
+    parser.add_argument('--lemma-vocabulary', type=int, default=10000,
+            metavar='N',
+            help='size of lemma vocabulary for aux task')
+    parser.add_argument('--hybrid-vocabulary-overlap', type=int, default=0,
+            metavar='N',
+            help='overlap vocabularies of word and character-level decoder '
+            'during training with all except this number of least frequent words')
+    parser.add_argument('--max-lines-per-shard', type=int, default=1000000,
+            metavar='N',
+            help='Approximate size of the shards, in sentences.')
+    parser.add_argument('--min-lines-per-group', type=int, default=128,
+            metavar='N',
+            help='Do not split a padding group if the result would contain '
+            'less than this number of sentences.')
+    parser.add_argument('--min-saved-padding', type=int, default=2048,
+            metavar='N',
+            help='Do not split a padding group if the result would save '
+            'less than this number of timesteps of wasted padding.')
+    parser.add_argument('--filenames', type=str,
+                default='{corpus}.shard{shard:03}.group{group:03}.pickle',
+                help='Template string for sharded file names. '
+                'Use {corpus}, {shard} and {group}.')
+    parser.add_argument('--filenames', type=str,
+                default='{corpus}.vocab.pickle',
+                help='Template string for vocabulary file name. '
+                'Use {corpus}.')
 
+    args = parser.parse_args()
 
-        # type of encoders depends on format
-        if args.source_format == 'char':
-            src_reader = tokenize(args.source, 'char', False)
-            # TextEncoder from all chars
-            src_encoder = TextEncoder(
-                #sequences=[token for sent in src_reader() for token in sent],
-                min_count=args.min_char_count)
-        elif args.source_format == 'hybrid':
-            src_reader = tokenize(args.source, 'space', False)
-            src_char_encoder = TextEncoder(
-                #sequences=[token for sent in src_reader() for token in sent],
-                min_count=args.min_char_count,
-                special=())
-            src_encoder = TextEncoder(
-                #sequences=src_reader(),
-                max_vocab=args.source_vocabulary,
-                sub_encoder=src_char_encoder)
-        elif args.source_format == 'finnpos':
-            src_reader = finnpos_reader(args.source)
-            # FinnposEncoder does the lot
-            src_encoder = FinnposEncoder(
-                #sequences=src_reader(),
-                max_vocab=args.source_vocabulary,
-                max_lemma_vocab=args.lemma_vocabulary)
+    # type of encoders depends on format
+    if args.source_format == 'char':
+        src_reader = tokenize(args.source, 'char', False)
+        # TextEncoder from all chars
+        src_encoder = TextEncoder(
+            #sequences=[token for sent in src_reader() for token in sent],
+            min_count=args.min_char_count)
+    elif args.source_format == 'hybrid':
+        src_reader = tokenize(args.source, 'space', False)
+        src_char_encoder = TextEncoder(
+            #sequences=[token for sent in src_reader() for token in sent],
+            min_count=args.min_char_count,
+            special=())
+        src_encoder = TextEncoder(
+            #sequences=src_reader(),
+            max_vocab=args.source_vocabulary,
+            sub_encoder=src_char_encoder)
+    elif args.source_format == 'finnpos':
+        src_reader = finnpos_reader(args.source)
+        # FinnposEncoder does the lot
+        src_encoder = FinnposEncoder(
+            #sequences=src_reader(),
+            max_vocab=args.source_vocabulary,
+            max_lemma_vocab=args.lemma_vocabulary)
 
-        if args.target_format == 'char':
-            trg_reader = tokenize(args.target, 'char', False)
-            # TextEncoder from all chars
+    if args.target_format == 'char':
+        trg_reader = tokenize(args.target, 'char', False)
+        # TextEncoder from all chars
+        trg_encoder = TextEncoder(
+            #sequences=[token for sent in trg_reader() for token in sent],
+            min_count=args.min_char_count)
+    elif args.target_format == 'hybrid':
+        trg_reader = tokenize(args.target, 'space', False)
+        trg_char_encoder = TextEncoder(
+            #sequences=[token for sent in trg_reader() for token in sent],
+            min_count=args.min_char_count,
+            special=())
+        if args.hybrid_vocabulary_overlap <= 0:
             trg_encoder = TextEncoder(
-                #sequences=[token for sent in trg_reader() for token in sent],
-                min_count=args.min_char_count)
-        elif args.target_format == 'hybrid':
-            trg_reader = tokenize(args.target, 'space', False)
-            trg_char_encoder = TextEncoder(
-                #sequences=[token for sent in trg_reader() for token in sent],
-                min_count=args.min_char_count,
-                special=())
-            if args.hybrid_vocabulary_overlap <= 0:
-                trg_encoder = TextEncoder(
-                    #sequences=trg_reader(),
-                    max_vocab=args.target_vocabulary,
-                    sub_encoder=trg_char_encoder)
-            else:
-                trg_encoder = TwoThresholdTextEncoder(
-                    #sequences=trg_reader(),
-                    max_vocab=args.target_vocabulary,
-                    overlap=args.hybrid_vocabulary_overlap,
-                    sub_encoder=trg_char_encoder)
-        elif args.target_format == 'finnpos':
-            trg_reader = finnpos_reader(args.target)
-            # FinnposEncoder does the lot
-            trg_encoder = FinnposEncoder(
                 #sequences=trg_reader(),
                 max_vocab=args.target_vocabulary,
-                max_lemma_vocab=args.lemma_vocabulary,
-                overlap=args.hybrid_vocabulary_overlap)
+                sub_encoder=trg_char_encoder)
+        else:
+            trg_encoder = TwoThresholdTextEncoder(
+                #sequences=trg_reader(),
+                max_vocab=args.target_vocabulary,
+                overlap=args.hybrid_vocabulary_overlap,
+                sub_encoder=trg_char_encoder)
+    elif args.target_format == 'finnpos':
+        trg_reader = finnpos_reader(args.target)
+        # FinnposEncoder does the lot
+        trg_encoder = FinnposEncoder(
+            #sequences=trg_reader(),
+            max_vocab=args.target_vocabulary,
+            max_lemma_vocab=args.lemma_vocabulary,
+            overlap=args.hybrid_vocabulary_overlap)
 
-        sharded = ShardedData(
-            args.corpus,
-            src_reader,
-            trg_reader,
-            src_encoder,
-            trg_encoder,
-            max_lines_per_shard=args.max_lines_per_shard,
-            min_lines_per_group=args.min_lines_per_group,
-            min_saved_padding=args.min_saved_padding,
-            file_fmt=args.file_fmt,
-            vocab_file_fmt=args.vocab_file_fmt)
-        sharded.prepare_data()
+    sharded = ShardedData(
+        args.corpus,
+        src_reader,
+        trg_reader,
+        src_encoder,
+        trg_encoder,
+        max_lines_per_shard=args.max_lines_per_shard,
+        min_lines_per_group=args.min_lines_per_group,
+        min_saved_padding=args.min_saved_padding,
+        file_fmt=args.file_fmt,
+        vocab_file_fmt=args.vocab_file_fmt)
+    sharded.prepare_data()
