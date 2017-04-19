@@ -147,7 +147,7 @@ class FinnposEncoder(object):
         self.max_lemma_vocab = max_lemma_vocab
         self.overlap = overlap
         char_encoder = TextEncoder(min_count=min_char_count)
-        self.subencoders = {
+        self.sub_encoders = {
             'surface': TwoThresholdTextEncoder(
                 max_vocab=max_vocab,
                 overlap=overlap,
@@ -161,32 +161,36 @@ class FinnposEncoder(object):
             'mood': TextEncoder(),
             'tense': TextEncoder()}
 
+    @property
+    def sub_encoder(self):
+        return self.sub_encoders['surface'].sub_encoder
+
     def count(self, tpl, raw=False):
-        self.subencoders['surface'].count(tpl.surface, raw=True)
-        self.subencoders['logf'].count(tpl.lemma, raw=True)
-        self.subencoders['lemma'].count(tpl.lemma, raw=True)
-        self.subencoders['pos'].count(tpl.pos, raw=True)
-        self.subencoders['num'].count(tpl.num, raw=True)
-        self.subencoders['case'].count(tpl.case, raw=True)
-        self.subencoders['pers'].count(tpl.pers, raw=True)
-        self.subencoders['mood'].count(tpl.mood, raw=True)
-        self.subencoders['tense'].count(tpl.tense, raw=True)
+        self.sub_encoders['surface'].count(tpl.surface, raw=True)
+        self.sub_encoders['logf'].count(tpl.lemma, raw=True)
+        self.sub_encoders['lemma'].count(tpl.lemma, raw=True)
+        self.sub_encoders['pos'].count(tpl.pos, raw=True)
+        self.sub_encoders['num'].count(tpl.num, raw=True)
+        self.sub_encoders['case'].count(tpl.case, raw=True)
+        self.sub_encoders['pers'].count(tpl.pers, raw=True)
+        self.sub_encoders['mood'].count(tpl.mood, raw=True)
+        self.sub_encoders['tense'].count(tpl.tense, raw=True)
 
     def done(self):
-        for subenc in self.subencoders.values():
+        for subenc in self.sub_encoders.values():
             subenc.done()
 
     def fields(self):
         return (
-            ('surface', len(self.subencoders['surface'])),
-            ('logf',    len(self.subencoders['logf'])),
-            ('lemma',   len(self.subencoders['lemma'])),
-            ('pos',     len(self.subencoders['pos'])),
-            ('num',     len(self.subencoders['num'])),
-            ('case',    len(self.subencoders['case'])),
-            ('pers',    len(self.subencoders['pers'])),
-            ('mood',    len(self.subencoders['mood'])),
-            ('tense',   len(self.subencoders['tense'])),
+            ('surface', len(self.sub_encoders['surface'])),
+            ('logf',    len(self.sub_encoders['logf'])),
+            ('lemma',   len(self.sub_encoders['lemma'])),
+            ('pos',     len(self.sub_encoders['pos'])),
+            ('num',     len(self.sub_encoders['num'])),
+            ('case',    len(self.sub_encoders['case'])),
+            ('pers',    len(self.sub_encoders['pers'])),
+            ('mood',    len(self.sub_encoders['mood'])),
+            ('tense',   len(self.sub_encoders['tense'])),
             )
 
     def __str__(self):
@@ -200,32 +204,32 @@ class FinnposEncoder(object):
 
     def __len__(self):
         # length of main vocabulary
-        return len(self.subencoders['surface'])
+        return len(self.sub_encoders['surface'])
 
     def encode_sequence(self, fields, max_length=None, dtype=np.int32):
-        surf = self.subencoders['surface'].encode_sequence(fields.surface,
+        surf = self.sub_encoders['surface'].encode_sequence(fields.surface,
              max_length=max_length, dtype=dtype, raw=True)
-        logf = self.subencoders['logf'].encode_sequence(fields.lemma,
+        logf = self.sub_encoders['logf'].encode_sequence(fields.lemma,
              max_length=max_length, dtype=dtype, raw=True)
-        lemma = self.subencoders['lemma'].encode_sequence(fields.lemma,
+        lemma = self.sub_encoders['lemma'].encode_sequence(fields.lemma,
              max_length=max_length, dtype=dtype, raw=True)
-        pos = self.subencoders['pos'].encode_sequence(fields.pos,
+        pos = self.sub_encoders['pos'].encode_sequence(fields.pos,
              max_length=max_length, dtype=dtype, raw=True)
-        num = self.subencoders['num'].encode_sequence(fields.num,
+        num = self.sub_encoders['num'].encode_sequence(fields.num,
              max_length=max_length, dtype=dtype, raw=True)
-        case = self.subencoders['case'].encode_sequence(fields.case,
+        case = self.sub_encoders['case'].encode_sequence(fields.case,
              max_length=max_length, dtype=dtype, raw=True)
-        pers = self.subencoders['pers'].encode_sequence(fields.pers,
+        pers = self.sub_encoders['pers'].encode_sequence(fields.pers,
              max_length=max_length, dtype=dtype, raw=True)
-        mood = self.subencoders['mood'].encode_sequence(fields.mood,
+        mood = self.sub_encoders['mood'].encode_sequence(fields.mood,
              max_length=max_length, dtype=dtype, raw=True)
-        tense = self.subencoders['tense'].encode_sequence(fields.tense,
+        tense = self.sub_encoders['tense'].encode_sequence(fields.tense,
              max_length=max_length, dtype=dtype, raw=True)
         return Aux(surf, logf, lemma, pos, num, case, pers, mood, tense)
 
     def pad_sequences(self, encoded_sequences,
                       max_length=None, pad_right=True, dtype=np.int32):
-        m, mask, char, char_mask = self.subencoders['surface'].pad_sequences(
+        m, mask, char, char_mask = self.sub_encoders['surface'].pad_sequences(
             [x.surface for x in encoded_sequences],
             max_length=max_length, pad_right=pad_right, dtype=dtype)
         length = m.shape[0]
@@ -245,13 +249,16 @@ class FinnposEncoder(object):
 
     def decode_sentence(self, encoded):
         return (
-            self.subencoders['surface'].decode_sentence(encoded.surface),
-            self.subencoders['logf'].decode_sentence(encoded.lemma, no_boundary=True),
-            self.subencoders['lemma'].decode_sentence(encoded.lemma),
-            self.subencoders['pos'].decode_sentence(encoded.pos),
-            self.subencoders['num'].decode_sentence(encoded.num),
-            self.subencoders['case'].decode_sentence(encoded.case),
-            self.subencoders['pers'].decode_sentence(encoded.pers),
-            self.subencoders['mood'].decode_sentence(encoded.mood),
-            self.subencoders['tense'].decode_sentence(encoded.tense),
+            self.sub_encoders['surface'].decode_sentence(encoded.surface),
+            self.sub_encoders['logf'].decode_sentence(encoded.lemma, no_boundary=True),
+            self.sub_encoders['lemma'].decode_sentence(encoded.lemma),
+            self.sub_encoders['pos'].decode_sentence(encoded.pos),
+            self.sub_encoders['num'].decode_sentence(encoded.num),
+            self.sub_encoders['case'].decode_sentence(encoded.case),
+            self.sub_encoders['pers'].decode_sentence(encoded.pers),
+            self.sub_encoders['mood'].decode_sentence(encoded.mood),
+            self.sub_encoders['tense'].decode_sentence(encoded.tense),
         )
+
+    def split_unk_outputs(self, *args):
+        return self.sub_encoders['surface'].split_unk_outputs(*args)

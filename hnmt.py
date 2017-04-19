@@ -20,7 +20,7 @@ from search import beam_with_coverage
 from deepsequence import *
 #from finnpos import *
 from finnpos import *
-from prepare_data import iterate_sharded_data
+from prepare_data import iterate_sharded_data, LineStatistics
 
 from bnas.model import Model, Linear, Embeddings, LSTMSequence
 from bnas.optimize import Adam, iterate_batches
@@ -969,9 +969,9 @@ def main():
             test_trg_finnpos = []
 
         print('reading sharded data...', file=sys.stderr, flush=True)
-        # FIXME: sharding stuff here
-        corpus, shard_file_fmt, src_encoder, trg_encoder, line_statistics, n_groups = \
-            pickle.loads(args.train)
+        with open(args.train, 'rb') as fobj:
+            corpus, shard_file_fmt, src_encoder, trg_encoder, line_statistics, n_groups = \
+                pickle.load(fobj)
         print('...done', file=sys.stderr, flush=True)
 
         n_test_sents = len(test_src_sents)

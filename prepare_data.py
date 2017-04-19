@@ -210,15 +210,16 @@ class ShardedData(object):
 
 def iterate_sharded_data(corpus, file_fmt, line_statistics, n_groups, budget_func):
     while True:
-        shards = line_statistics.keys()
+        shards = list(line_statistics.keys())
         random.shuffle(shards)
         for shard in shards:
+            print('Loading shard {}...'.format(shard))
             # load in the data of the shard
-            groups = [pickle.load(file_fmt.format(
-                                  corpus=corpus,
-                                  shard=shard,
-                                  group=group))
-                      for group in range(n_groups)]
+            groups = []
+            for group in range(n_groups):
+                with open(file_fmt.format(
+                        corpus=corpus, shard=shard, group=group), 'rb') as fobj:
+                    groups.append(pickle.load(fobj))
             # randomize indices belonging to shard
             lines = list(line_statistics[shard])
             random.shuffle(lines)
