@@ -20,6 +20,7 @@ from search import beam_with_coverage
 from deepsequence import *
 #from finnpos import *
 from finnpos import *
+from prepare_data import iterate_sharded_data
 
 from bnas.model import Model, Linear, Embeddings, LSTMSequence
 from bnas.optimize import Adam, iterate_batches
@@ -34,7 +35,7 @@ except ImportError:
     print('efmaral is not available, will not be able to use attention loss',
           file=sys.stderr, flush=True)
 
-def batch_budget(limit
+def batch_budget(limit,
                  const_weight=0, src_weight=0,
                  trg_weight=1, x_weight=0, unk_weight=0):
     def exceeds_budget(old, new):
@@ -141,14 +142,8 @@ class NMT(Model):
             self.add(Linear(
                 '{}_emission'.format(field),
                 config['aux_dims'],
-                vocab_size)
+                vocab_size))
 
-        # The total loss is
-        #   lambda_o*xent(target sentence) + lambda_a*xent(alignment)
-        self.lambda_o = theano.shared(
-                np.array(1.0, dtype=theano.config.floatX))
-        self.lambda_a = theano.shared(
-                np.array(config['alignment_loss'], dtype=theano.config.floatX))
         for prefix, backwards in (('fwd', False), ('back', True)):
             self.add(LSTMSequence(
                 prefix+'_char_encoder', backwards,
@@ -318,8 +313,7 @@ class NMT(Model):
 
     def loss(self, *args):
         outputs_xent, attention_xent = self.xent(*args)
-        return super().loss() + self.lambda_o*outputs_xent \
-                + self.lambda_a*attention_xent
+        return super().loss() + outputs_xent
 
     def unify_embeddings(self, model):
         """Ensure that the embeddings use the same vocabulary as model"""
@@ -966,8 +960,7 @@ def main():
             #test_trg_sents = read_sents(
             #        config['test_target'], config['target_tokenizer'],
             #        config['target_lowercase'] == 'yes')
-            test_trg_finnpos = list(read_finnpos(read_sents(
-                    config['test_target'], 'char', False)))
+            test_trg_finnpos = list(finnpos_reader(config['test_target'])())
             #assert len(test_src_sents) == len(test_trg_sents)
             assert len(test_src_sents) == len(test_trg_finnpos)
         else:
@@ -977,7 +970,7 @@ def main():
 
         print('reading sharded data...', file=sys.stderr, flush=True)
         # FIXME: sharding stuff here
-        corpus, file_fmt, src_encoder, trg_encoder, line_statistics, n_groups = \ 
+        corpus, shard_file_fmt, src_encoder, trg_encoder, line_statistics, n_groups = \
             pickle.loads(args.train)
         print('...done', file=sys.stderr, flush=True)
 
@@ -1134,7 +1127,13 @@ def main():
             outf.close()
     else:
         # encoding "test" set in advance
-        # FIXME
+        # FIXME one minibatch is NOT enough: validate should use whole set
+        test_src_sents = test_src_sents[:config['batch_size']]
+        test_trg_finnpos = test_trg_finnpos[:config['batch_size']]
+        test_src = src_encoder.pad_sequences(
+            [src_encoder.encode_sequence(sent) for sent in test_src_sents])
+        test_trg = trg_encoder.pad_sequences(
+            [trg_encoder.encode_sequence(sent) for sent in test_trg_finnpos])
 
         logf = None
         if args.log_file:
@@ -1168,13 +1167,11 @@ def main():
             t0 = time()
             for batch_pairs in iterate_batches(
                     test_pairs, config['batch_size']):
-                test_x, test_y, test_aux = prepare_batch(batch_pairs)
-                test_aux = test_aux[1:]
-                (test_outputs, test_outputs_mask,
-                 test_char_outputs, test_char_mask,
-                 test_attention) = test_y
+                test_x, test_y = batch_pairs
+                test_outputs = test_y[0]
+                test_outputs_mask = test_y[1]
                 test_xent, test_xent_attention = model.xent_fun(
-                        *(test_x + test_y + test_aux))
+                        *(test_x + test_y))
                 scale = (test_outputs.shape[1] /
                             (test_outputs_mask.sum()*np.log(2)))
                 result += test_xent * scale
@@ -1246,11 +1243,6 @@ def main():
                     print('Translation finished: %.2f s' % (time()-t0),
                           flush=True)
 
-                # TODO: add options etc
-                print('lambda_a = %g' % model.lambda_a.get_value())
-                model.lambda_a.set_value(np.array(
-                    model.lambda_a.get_value() * config['alignment_decay'],
-                    dtype=theano.config.floatX))
                 if time() >= end_time: break
 
             epoch += 1
