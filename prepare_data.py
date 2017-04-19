@@ -208,9 +208,7 @@ class ShardedData(object):
                 fobj, protocol=pickle.HIGHEST_PROTOCOL)
 
 
-def iterate_sharded_data(vocab_file, budget_func):
-    corpus, file_fmt, src_encoder, trg_encoder, line_statistics, n_groups = \
-        pickle.loads(vocab_file)
+def iterate_sharded_data(corpus, file_fmt, line_statistics, n_groups, budget_func):
     while True:
         shards = line_statistics.keys()
         random.shuffle(shards)
