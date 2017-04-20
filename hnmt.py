@@ -20,7 +20,7 @@ from search import beam_with_coverage
 from deepsequence import *
 #from finnpos import *
 from finnpos import *
-from prepare_data import iterate_sharded_data, LineStatistics
+from prepare_data import iterate_sharded_data, LineStatistics, instantiate_mb
 
 from bnas.model import Model, Linear, Embeddings, LSTMSequence
 from bnas.optimize import Adam, iterate_batches
@@ -651,7 +651,7 @@ class NMT(Model):
                 pred_mood, pred_tense)
 
     def create_optimizer(self):
-        print('optimizer expects args: ', self.x, self.y, self.aux)
+        #print('optimizer expects args: ', self.x, self.y, self.aux)
         return Adam(
                 self.parameters(),
                 self.loss(*(self.x + self.y + self.aux)),
@@ -1026,68 +1026,51 @@ def main():
                     config['target_tokenizer'])
 
     def monitor(translate_src, translate_trg):
-            sentences, auxes = model.search(
-                    *(translate_src + (config['max_target_length'],)),
-                    beam_size=config['beam_size'],
-                    alpha=config['alpha'],
-                    beta=config['beta'],
-                    len_smooth=config['len_smooth'],
-                    others=models[1:],
-                    expand_n=config['hybrid_expand_n'],
-                    char_cost_weight=config['hybrid_char_cost_weight'],
-                    decode_aux=True)
-            for (src, trg, sentence, aux) in zip(translate_src, translate_trg, sentences, auxes):
-                encoded = sentence[0]   # extract best sentence
-                # aux is already 1-best
-                print('   SOURCE / TARGET / OUTPUT / gold AUXes / pred AUXes')
-                print(detokenize(
-                    config['src_encoder'].decode_sentence(src),
-                    config['source_tokenizer']))
-                print(detokenize(
-                    config['trg_encoder'].decode_sentence(trg.sequence),
-                    config['target_tokenizer']))
-                print(detokenize(
-                    config['trg_encoder'].decode_sentence(encoded),
-                    config['target_tokenizer']))
-                print('-'*72)
-                # gold aux
-                print(' '.join(
-                    config['logf_encoder'].decode_sentence(trg.logf)))
-                print(' '.join(
-                    config['lemma_encoder'].decode_sentence(trg.lemma)))
-                print(' '.join(
-                    config['pos_encoder'].decode_sentence(trg.pos)))
-                print(' '.join(
-                    config['num_encoder'].decode_sentence(trg.num)))
-                print(' '.join(
-                    config['case_encoder'].decode_sentence(trg.case)))
-                print(' '.join(
-                    config['pers_encoder'].decode_sentence(trg.pers)))
-                print(' '.join(
-                    config['mood_encoder'].decode_sentence(trg.mood)))
-                print(' '.join(
-                    config['tense_encoder'].decode_sentence(trg.tense)))
-                print('-'*72)
-                # pred aux
-                logf, lemma, pos, num, case, pers, mood, tense = aux
-                print(' '.join(
-                    config['logf_encoder'].decode_sentence(Encoded(logf, None), no_boundary=True)))
-                print(' '.join(
-                    config['lemma_encoder'].decode_sentence(Encoded(lemma, None))))
-                print(' '.join(
-                    config['pos_encoder'].decode_sentence(Encoded(pos, None))))
-                print(' '.join(
-                    config['num_encoder'].decode_sentence(Encoded(num, None))))
-                print(' '.join(
-                    config['case_encoder'].decode_sentence(Encoded(case, None))))
-                print(' '.join(
-                    config['pers_encoder'].decode_sentence(Encoded(pers, None))))
-                print(' '.join(
-                    config['mood_encoder'].decode_sentence(Encoded(mood, None))))
-                print(' '.join(
-                    config['tense_encoder'].decode_sentence(Encoded(tense, None))))
-                print('='*72)
-        
+        sentences, auxes = model.search(
+                *(translate_src + (config['max_target_length'],)),
+                beam_size=config['beam_size'],
+                alpha=config['alpha'],
+                beta=config['beta'],
+                len_smooth=config['len_smooth'],
+                others=models[1:],
+                expand_n=config['hybrid_expand_n'],
+                char_cost_weight=config['hybrid_char_cost_weight'],
+                decode_aux=True)
+        decoded_src = config['src_encoder'].decode_padded(*translate_src)
+        decoded_trg = config['trg_encoder'].decode_padded(*translate_trg)
+
+        for (src, trg, sentence, aux) in zip(decoded_src, decoded_trg, sentences, auxes):
+            encoded = sentence[0]   # extract best sentence
+            # aux is already 1-best
+            #logf, lemma, pos, num, case, pers, mood, tense = aux
+            translation = Aux(encoded, *aux)
+            decoded_translation = config['trg_encoder'].decode_sentence(translation)
+
+            print('   SOURCE / TARGET / OUTPUT / gold AUXes / pred AUXes')
+            print(detokenize(
+                src.surface,
+                config['source_tokenizer']))
+            print(detokenize(
+                trg.surface,
+                config['target_tokenizer']))
+            print(detokenize(
+                decoded_translation.surface,
+                config['target_tokenizer']))
+            print('-'*72)
+            # gold aux
+            for (field, seq) in zip(trg._fields, trg):
+                if field == 'surface':
+                    continue
+                else:
+                    print(' '.join(seq))
+            print('-'*72)
+            # pred aux
+            for (field, seq) in zip(decoded_translation._fields, decoded_translation):
+                if field == 'surface':
+                    continue
+                else:
+                    print(' '.join(seq))
+            print('='*72)
 
     if args.translate:
         print('Translating...', file=sys.stderr, flush=True, end='')
@@ -1109,11 +1092,15 @@ def main():
         while len(test_src_sents) > 0:
             test_src, test_src_sents = test_src_sents[:config['batch_size']], test_src_sents[config['batch_size']:]
             test_trg, test_trg_finnpos = test_trg_finnpos[:config['batch_size']], test_trg_finnpos[config['batch_size']:]
-            test_src = src_encoder.pad_sequences(
-                [src_encoder.encode_sequence(sent) for sent in test_src], pad_chars=True)
-            test_trg = trg_encoder.pad_sequences(
-                [trg_encoder.encode_sequence(sent) for sent in test_trg], pad_chars=True)
-            test_batches.append(test_src, test_trg)
+            padded_test_src = src_encoder.pad_sequences(
+                [src_encoder.encode_sequence(sent) for sent in test_src])
+            padded_test_trg = trg_encoder.pad_sequences(
+                [trg_encoder.encode_sequence(sent)
+                 for sent in test_trg])
+            # len(test_src) gives the actual number of sentences in batch
+            padded_test_src = instantiate_mb(padded_test_src, list(range(len(test_src))), src_encoder)
+            padded_test_trg = instantiate_mb(padded_test_trg, list(range(len(test_trg))), trg_encoder)
+            test_batches.append((padded_test_src, padded_test_trg))
 
         logf = None
         if args.log_file:
@@ -1149,8 +1136,10 @@ def main():
                 test_x, test_y = batch
                 test_outputs = test_y[0]
                 test_outputs_mask = test_y[1]
-                test_xent = model.xent_fun(
-                        *(test_x + test_y))
+                #print('args to validate x:', [foo.shape for foo in test_x])
+                #print('type of args to validate y:', [type(foo) for foo in test_y])
+                #print('args to validate y:', [foo.shape for foo in test_y])
+                test_xent = model.xent_fun(*(test_x + test_y))
                 scale = (test_outputs.shape[1] /
                             (test_outputs_mask.sum()*np.log(2)))
                 result += test_xent * scale
@@ -1192,8 +1181,8 @@ def main():
                 #print('-'*72, flush=True)
 
                 t0 = time()
-                print('args to optimizer x:', [foo.shape for foo in x])
-                print('args to optimizer y:', [foo.shape for foo in y])
+                #print('args to optimizer x:', [foo.shape for foo in x])
+                #print('args to optimizer y:', [foo.shape for foo in y])
                 train_loss = optimizer.step(*(x + y))
                 train_loss *= (y[0].shape[1] / (y[1].sum()*np.log(2)))
                 print('Batch %d:%d of shape %s has loss %.3f (%.2f s)' % (

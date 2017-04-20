@@ -224,6 +224,7 @@ def instantiate_mb(group, indices, encoder):
         flat = []
         current_unk_offset = 0
         for (i, idx) in enumerate(indices):
+            print(idx, len(group[2]))
             flat.extend(group[2][idx])
             unk_offsets[0,i] = current_unk_offset
             current_unk_offset += len(group[2][idx])
