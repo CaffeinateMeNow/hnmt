@@ -130,11 +130,23 @@ class LogFreqEncoder(object):
         return m, mask
 
     def decode_sentence(self, encoded, no_boundary=False):
-        seq = encoded.sequence
+        try:
+            seq = encoded.sequence
+        except AttributeError:
+            seq = encoded
         if self.use_boundaries and not no_boundary:
             seq = seq[1:]
         #return [str(np.exp(x) - 1) for x in seq]
         return [str(x) for x in seq]
+
+    def decode_padded(self, m, mask, raw=True):
+        result = []
+        for row, row_mask in zip(m.T, mask.T):
+            decoded_row = []
+            for x, b in zip(row, row_mask):
+                decoded_row.append(str(x))
+            result.append(decoded_row)
+        return result
 
 
 class FinnposEncoder(object):
@@ -248,7 +260,7 @@ class FinnposEncoder(object):
         return padded_surf + (out,)
 
     def decode_sentence(self, encoded):
-        return (
+        return Aux(
             self.sub_encoders['surface'].decode_sentence(encoded.surface),
             self.sub_encoders['logf'].decode_sentence(encoded.lemma, no_boundary=True),
             self.sub_encoders['lemma'].decode_sentence(encoded.lemma),
@@ -259,6 +271,21 @@ class FinnposEncoder(object):
             self.sub_encoders['mood'].decode_sentence(encoded.mood),
             self.sub_encoders['tense'].decode_sentence(encoded.tense),
         )
+
+    def decode_padded(self, m, mask, chars, char_mask, *aux):
+        _, lemma, pos, num, case, pers, mood, tense = aux
+        result = (
+            self.sub_encoders['surface'].decode_padded(m, mask, chars, char_mask, raw=True),
+            self.sub_encoders['logf'].decode_padded(lemma, mask, raw=True),
+            self.sub_encoders['lemma'].decode_padded(lemma, mask, raw=True),
+            self.sub_encoders['pos'].decode_padded(pos, mask, raw=True),
+            self.sub_encoders['num'].decode_padded(num, mask, raw=True),
+            self.sub_encoders['case'].decode_padded(case, mask, raw=True),
+            self.sub_encoders['pers'].decode_padded(pers, mask, raw=True),
+            self.sub_encoders['mood'].decode_padded(mood, mask, raw=True),
+            self.sub_encoders['tense'].decode_padded(tense, mask, raw=True),
+        )
+        return [Aux(*x) for x in zip(*result)]
 
     def split_unk_outputs(self, *args):
         return self.sub_encoders['surface'].split_unk_outputs(*args)

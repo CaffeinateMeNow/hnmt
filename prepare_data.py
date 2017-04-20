@@ -263,11 +263,10 @@ def iterate_sharded_data(corpus, file_fmt, line_statistics, n_groups,
                     # instantiate mb (indexing into full padding group tensors)
                     indices = np.array([line.idx_in_group
                                         for line in minibatches[line.group]])
-                    # FIXME: char and char_mask cannot be indexed like this!
                     src = instantiate_mb(groups[line.group][0], indices, src_encoder)
                     trg = instantiate_mb(groups[line.group][1], indices, trg_encoder)
-                    print('src shapes (after indexing): ', [m.shape for m in src])
-                    print('trg shapes (after indexing): ', [m.shape for m in trg])
+                    #print('src shapes (after indexing): ', [m.shape for m in src])
+                    #print('trg shapes (after indexing): ', [m.shape for m in trg])
                     # yield it and start a new one
                     yield (src, trg)
                     minibatches[line.group] = []
@@ -276,8 +275,8 @@ def iterate_sharded_data(corpus, file_fmt, line_statistics, n_groups,
             for (mb, group) in zip(minibatches, groups):
                 # yield the unfinished minibatches
                 indices = np.array([line.idx_in_group for line in mb])
-                src = [m[:, indices] for m in group[0]]
-                trg = [m[:, indices] for m in group[1]]
+                src = instantiate_mb(group[0], indices, src_encoder)
+                trg = instantiate_mb(group[1], indices, trg_encoder)
                 # yield it and start a new one
                 yield (src, trg)
 

@@ -127,6 +127,10 @@ class TextEncoder(object):
         return Surface(out)
 
     def decode_sentence(self, encoded):
+        try:
+            encoded = encoded.surface
+        except AttributeError:
+            pass
         start = self.index.get('<S>')
         stop = self.index.get('</S>')
         return [''.join(self.sub_encoder.decode_sentence(
@@ -182,10 +186,10 @@ class TextEncoder(object):
             else:
                 return m, mask, all_unknowns
 
-    def decode_padded(self, m, mask, char=None, char_mask=None):
+    def decode_padded(self, m, mask, char=None, char_mask=None, raw=False):
         if char is not None:
             unknowns = list(map(
-                ''.join, self.sub_encoder.decode_padded(char, char_mask)))
+                ''.join, self.sub_encoder.decode_padded(char, char_mask, raw=True)))
         start = self.index.get('<S>')
         stop = self.index.get('</S>')
         result = []
@@ -199,7 +203,10 @@ class TextEncoder(object):
                 else:
                     decoded_row.append(self.vocab[x])
             result.append(decoded_row)
-        return result
+        if raw:
+            return result
+        else:
+            return [Surface(x) for x in result]
 
     def split_unk_outputs(self, outputs, outputs_mask):
         # Compute separate mask for character level (UNK) words
