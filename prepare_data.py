@@ -187,8 +187,15 @@ class ShardedData(object):
                     corpus=self.corpus,
                     shard=shard,
                     group=group)
-                print('saving shard {} group {} with len ({}, {}) in file {}'.format(
-                    shard, group, padded_src[0].shape, padded_trg[0].shape, group_file_name))
+                n_src_unks = None
+                n_trg_unks = None
+                if len(padded_src) > 2:
+                    n_src_unks = len(padded_src[2])
+                if len(padded_trg) > 2:
+                    n_trg_unks = len(padded_trg[2])
+                print('saving shard {} group {} with len ({}, {}) unks ({}, {}) in file {}'.format(
+                    shard, group, padded_src[0].shape, padded_trg[0].shape,
+                    n_src_unks, n_trg_unks, group_file_name))
                 with open(group_file_name, 'wb') as fobj:
                     pickle.dump([padded_src, padded_trg],
                                 fobj, protocol=pickle.HIGHEST_PROTOCOL)
@@ -207,8 +214,25 @@ class ShardedData(object):
                  self.n_groups],
                 fobj, protocol=pickle.HIGHEST_PROTOCOL)
 
+def instantiate_mb(group, indices, encoder):
+    out = []
+               # word   # mask   # char # aux
+    actions = ('index', 'index', 'pad', 'aux')
+    for (m, action) in zip(group, actions):
+        if action == 'index':
+            out.append(m[:, indices])
+        elif action == 'pad':
+            # character-level is padded just-in-time
+            flat = [row for idx in indices for rows in m[idx]]
+            char, char_mask = encoder.sub_encoder.pad_sequences(flat)
+            out.extend((char, char_mask))
+        elif action == 'aux':
+            # all fields in aux should be word-level
+            out.extend(aux_m[:, indices] for aux_m in m)
+    return out
 
-def iterate_sharded_data(corpus, file_fmt, line_statistics, n_groups, budget_func):
+def iterate_sharded_data(corpus, file_fmt, line_statistics, n_groups,
+                         budget_func, src_encoder, trg_encoder):
     while True:
         shards = list(line_statistics.keys())
         random.shuffle(shards)
@@ -228,11 +252,16 @@ def iterate_sharded_data(corpus, file_fmt, line_statistics, n_groups, budget_fun
             for line in lines:
                 if budget_func(minibatches[line.group], line):
                     # group would become overfull according to budget
+                    print('yielding mb from shard {} group {}'.format(shard, line.group))
+                    print('src shapes (before indexing): ', [m.shape for m in groups[line.group][0]])
                     # instantiate mb (indexing into full padding group tensors)
                     indices = np.array([line.idx_in_group
                                         for line in minibatches[line.group]])
-                    src = [m[:, indices] for m in groups[line.group][0]]
-                    trg = [m[:, indices] for m in groups[line.group][1]]
+                    # FIXME: char and char_mask cannot be indexed like this!
+                    src = instantiate_mb(groups[line.group][0], indices, src_encoder)
+                    trg = instantiate_mb(groups[line.group][1], indices, trg_encoder)
+                    print('src shapes (after indexing): ', [m.shape for m in src])
+                    print('trg shapes (after indexing): ', [m.shape for m in trg])
                     # yield it and start a new one
                     yield (src, trg)
                     groups[line.group] = []

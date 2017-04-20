@@ -228,12 +228,12 @@ class FinnposEncoder(object):
         return Aux(surf, logf, lemma, pos, num, case, pers, mood, tense)
 
     def pad_sequences(self, encoded_sequences,
-                      max_length=None, pad_right=True, dtype=np.int32):
-        m, mask, char, char_mask = self.sub_encoders['surface'].pad_sequences(
+                      max_length=None, pad_right=True, dtype=np.int32, pad_chars=False):
+        padded_surf = self.sub_encoders['surface'].pad_sequences(
             [x.surface for x in encoded_sequences],
             max_length=max_length, pad_right=pad_right, dtype=dtype)
-        length = m.shape[0]
-        n_batch = m.shape[1]
+        length = padded_surf[0].shape[0]
+        n_batch = padded_surf[0].shape[1]
         out = Aux(*[
             np.zeros((length, n_batch), dtype=dtype)
             for _ in Aux._fields])
@@ -245,7 +245,7 @@ class FinnposEncoder(object):
                     out[j][:len(encoded),i] = encoded
                 else:
                     out[j][-len(encoded):,i] = encoded
-        return m, mask, char, char_mask, out
+        return padded_surf + (out,)
 
     def decode_sentence(self, encoded):
         return (

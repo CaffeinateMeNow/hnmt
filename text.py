@@ -105,7 +105,9 @@ class TextEncoder(object):
                 else:
                     encoded_unk = self.sub_encoder.encode_sequence(x)
                     unknowns.append(encoded_unk)
-                    return -len(unknowns)
+                    # ordering of negative elements is what matters,
+                    # not actual index
+                    return -99999   
             else:
                 return idx
         try:
@@ -134,7 +136,7 @@ class TextEncoder(object):
                 if x not in (start, stop)]
 
     def pad_sequences(self, encoded_sequences,
-                      max_length=None, pad_right=True, dtype=np.int32):
+                      max_length=None, pad_right=True, dtype=np.int32, pad_chars=False):
         """
         arguments:
             encoded_sequences -- a list of Encoded(encoded, unknowns) tuples.
@@ -161,10 +163,7 @@ class TextEncoder(object):
         for i,pair in enumerate(encoded_sequences):
             encoded, unknowns = pair
             if unknowns is not None:
-                unk_offset = len(all_unknowns)
-                encoded = [idx - unk_offset if idx < 0 else idx
-                           for idx in encoded]
-                all_unknowns.extend(unknowns)
+                all_unknowns.append(unknowns)
 
             if pad_right:
                 m[:len(encoded),i] = encoded
@@ -176,8 +175,12 @@ class TextEncoder(object):
         if self.sub_encoder is None:
             return m, mask
         else:
-            char, char_mask = self.sub_encoder.pad_sequences(all_unknowns)
-            return m, mask, char, char_mask
+            if pad_chars:
+                flat = [unk for unks in all_unknowns for unk in unks]
+                char, char_mask = self.sub_encoder.pad_sequences(flat)
+                return m, mask, char, char_mask
+            else:
+                return m, mask, all_unknowns
 
     def decode_padded(self, m, mask, char=None, char_mask=None):
         if char is not None:
@@ -185,10 +188,18 @@ class TextEncoder(object):
                 ''.join, self.sub_encoder.decode_padded(char, char_mask)))
         start = self.index.get('<S>')
         stop = self.index.get('</S>')
-        return [[unknowns[-x-1] if x < 0 else self.vocab[x]
-                 for x,b in zip(row,row_mask)
-                 if bool(b) and x not in (start, stop)]
-                for row,row_mask in zip(m.T,mask.T)]
+        result = []
+        for row, row_mask in zip(m.T, mask.T):
+            decoded_row = []
+            for x, b in zip(row,row_mask):
+                if not bool(b) or x in (start, stop):
+                    continue
+                if x < 0:
+                    decoded_row.append(unknowns.pop(0))
+                else:
+                    decoded_row.append(self.vocab[x])
+            result.append(decoded_row)
+        return result
 
     def split_unk_outputs(self, outputs, outputs_mask):
         # Compute separate mask for character level (UNK) words

@@ -1028,7 +1028,7 @@ def main():
             if encode:
                 batch_sents = [config['src_encoder'].encode_sequence(sent)
                                for sent in batch_sents]
-            x = config['src_encoder'].pad_sequences(batch_sents)
+            x = config['src_encoder'].pad_sequences(batch_sents, pad_chars=True)
             sentences = model.search(
                     *(x + (config['max_target_length'],)),
                     beam_size=config['beam_size'],
@@ -1129,9 +1129,9 @@ def main():
             test_src, test_src_sents = test_src_sents[:config['batch_size']], test_src_sents[config['batch_size']:]
             test_trg, test_trg_finnpos = test_trg_finnpos[:config['batch_size']], test_trg_finnpos[config['batch_size']:]
             test_src = src_encoder.pad_sequences(
-                [src_encoder.encode_sequence(sent) for sent in test_src])
+                [src_encoder.encode_sequence(sent) for sent in test_src], pad_chars=True)
             test_trg = trg_encoder.pad_sequences(
-                [trg_encoder.encode_sequence(sent) for sent in test_trg])
+                [trg_encoder.encode_sequence(sent) for sent in test_trg], pad_chars=True)
             test_batches.append(test_src, test_trg)
 
         logf = None
@@ -1193,7 +1193,9 @@ def main():
                     shard_file_fmt,
                     line_statistics,
                     n_groups,
-                    budget_func):
+                    budget_func,
+                    src_encoder,
+                    trg_encoder):
                 if logf and batch_nr % config['test_every'] == 0:
                     validate(test_batches, start_time, optimizer, logf, sent_nr)
 
