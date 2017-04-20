@@ -212,7 +212,7 @@ class FinnposEncoder(object):
         return str(self)
 
     def __getitem__(self, token):
-        raise Exception('__getitem__ on compound encoder FinnposEncoder')
+        self.sub_encoders['surface'][token]
 
     def __len__(self):
         # length of main vocabulary

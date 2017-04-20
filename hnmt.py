@@ -948,6 +948,9 @@ def main():
             test_src_sents = []
             test_trg_sents = []
             test_trg_finnpos = []
+        # FIXME tmp: truncating test set
+        test_src_sents = test_src_sents[:20]
+        test_trg_finnpos = test_trg_finnpos[:20]
 
         print('reading sharded data...', file=sys.stderr, flush=True)
         with open(args.train, 'rb') as fobj:
@@ -1026,8 +1029,9 @@ def main():
                     config['target_tokenizer'])
 
     def monitor(translate_src, translate_trg):
+        # FIXME; config['max_target_length'] is Null. Need to save it when preparing data. add config dict?
         sentences, auxes = model.search(
-                *(translate_src + (config['max_target_length'],)),
+                *(tuple(translate_src) + (config['max_target_length'],)),
                 beam_size=config['beam_size'],
                 alpha=config['alpha'],
                 beta=config['beta'],
@@ -1129,6 +1133,7 @@ def main():
             unk_weight=unk_weight)
 
         def validate(test_batches, start_time, optimizer, logf, sent_nr):
+            print('validating...')
             result = 0.
             att_result = 0.
             t0 = time()
@@ -1151,12 +1156,10 @@ def main():
                     optimizer.n_updates,
                     sent_nr),
                 file=logf, flush=True)
+            print('...validating done')
             return result
 
         while time() < end_time:
-            # Sort by combined sequence length when grouping training instances
-            # into batches.
-
             for batch_pairs in iterate_sharded_data(
                     corpus,
                     shard_file_fmt,
@@ -1168,9 +1171,9 @@ def main():
                 if logf and batch_nr % config['test_every'] == 0:
                     validate(test_batches, start_time, optimizer, logf, sent_nr)
 
-                sent_nr += len(batch_pairs)
-
                 x, y = batch_pairs
+                sent_nr += x[0].shape[1]
+                print('sent_nr {}'.format(sent_nr))
 
                 # This code can be used to print parameter and gradient
                 # statistics after each update, which can be useful to
