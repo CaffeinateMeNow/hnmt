@@ -215,27 +215,34 @@ class ShardedData(object):
                 fobj, protocol=pickle.HIGHEST_PROTOCOL)
 
 def instantiate_mb(group, indices, encoder):
-    out = []
-               # word   # mask   # char # aux
-    actions = ('renumber', 'index', 'pad', 'aux')
-    for (m, action) in zip(group, actions):
-        if action == 'renumber':
-            # renumber unknowns to consequtive numbers
-            extracted = m[:, indices]
-            unk0, unk1 = np.nonzero(extracted < -1)
-            extracted[unk0, unk1] = -np.arange(1, len(unk0) + 1)
-            out.append(extracted)
-        elif action == 'index':
-            out.append(m[:, indices])
-        elif action == 'pad':
-            # character-level is padded just-in-time
-            flat = [row for idx in indices for rows in m[idx] for row in rows]
-            char, char_mask = encoder.sub_encoder.pad_sequences(flat)
-            out.extend((char, char_mask))
-        elif action == 'aux':
-            # all fields in aux should be word-level
-            out.extend(aux_m[:, indices] for (field, aux_m) in zip(m._fields, m)
-                       if field != 'surface')
+    # start with placeholders for word-level
+    out = [None, None]
+    unk_offsets = np.zeros((1, len(indices)), dtype=np.int32)
+
+    if len(group) >= 3:
+        # character-level is padded just-in-time
+        flat = []
+        current_unk_offset = 0
+        for (i, idx) in enumerate(indices):
+            flat.extend(group[2][idx])
+            unk_offsets[0,i] = current_unk_offset
+            current_unk_offset += len(group[2][idx])
+        char, char_mask = encoder.sub_encoder.pad_sequences(flat)
+        out.extend((char, char_mask))
+
+    # word-level after determining unk_offsets
+    extracted = np.array(group[0][:, indices], dtype=np.int32)
+    unk_mask = (extracted < 0)
+    extracted += unk_mask * -unk_offsets
+    out[0] = extracted
+    # word-level is simply indexed
+    out[1] = group[1][:, indices]
+
+    if len(group) >= 4:
+        # all fields in aux should be word-level
+        out.extend(aux_m[:, indices]
+                   for (field, aux_m) in zip(group[3]._fields, group[3])
+                   if field != 'surface')
     return out
 
 def iterate_sharded_data(corpus, file_fmt, line_statistics, n_groups,

@@ -103,11 +103,9 @@ class TextEncoder(object):
                 if unknowns is None:
                     return unk
                 else:
-                    encoded_unk = self.sub_encoder.encode_sequence(x)
+                    encoded_unk = self.sub_encoder.encode_sequence(x, raw=True)
                     unknowns.append(encoded_unk)
-                    # ordering of negative elements is what matters,
-                    # not actual index
-                    return -99999   
+                    return -len(unknowns)
             else:
                 return idx
         try:
@@ -199,7 +197,7 @@ class TextEncoder(object):
                 if not bool(b) or x in (start, stop):
                     continue
                 if x < 0:
-                    decoded_row.append(unknowns.pop(0))
+                    decoded_row.append(unknowns[-x-1])
                 else:
                     decoded_row.append(self.vocab[x])
             result.append(decoded_row)
@@ -271,7 +269,7 @@ class TwoThresholdTextEncoder(TextEncoder):
             else:
                 low_idx = None
             if low_idx is None:
-                encoded_unk = self.sub_encoder.encode_sequence(x)
+                encoded_unk = self.sub_encoder.encode_sequence(x, raw=True)
                 unknowns.append(encoded_unk)
                 low_idx = -len(unknowns)
                 if idx is None:
