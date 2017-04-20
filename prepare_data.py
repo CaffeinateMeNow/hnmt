@@ -217,18 +217,25 @@ class ShardedData(object):
 def instantiate_mb(group, indices, encoder):
     out = []
                # word   # mask   # char # aux
-    actions = ('index', 'index', 'pad', 'aux')
+    actions = ('renumber', 'index', 'pad', 'aux')
     for (m, action) in zip(group, actions):
-        if action == 'index':
+        if action == 'renumber':
+            # renumber unknowns to consequtive numbers
+            extracted = m[:, indices]
+            unk0, unk1 = np.nonzero(extracted < -1)
+            extracted[unk0, unk1] = -np.arange(1, len(unk0) + 1)
+            out.append(extracted)
+        elif action == 'index':
             out.append(m[:, indices])
         elif action == 'pad':
             # character-level is padded just-in-time
-            flat = [row for idx in indices for rows in m[idx]]
+            flat = [row for idx in indices for rows in m[idx] for row in rows]
             char, char_mask = encoder.sub_encoder.pad_sequences(flat)
             out.extend((char, char_mask))
         elif action == 'aux':
             # all fields in aux should be word-level
-            out.extend(aux_m[:, indices] for aux_m in m)
+            out.extend(aux_m[:, indices] for (field, aux_m) in zip(m._fields, m)
+                       if field != 'surface')
     return out
 
 def iterate_sharded_data(corpus, file_fmt, line_statistics, n_groups,
@@ -253,7 +260,6 @@ def iterate_sharded_data(corpus, file_fmt, line_statistics, n_groups,
                 if budget_func(minibatches[line.group], line):
                     # group would become overfull according to budget
                     print('yielding mb from shard {} group {}'.format(shard, line.group))
-                    print('src shapes (before indexing): ', [m.shape for m in groups[line.group][0]])
                     # instantiate mb (indexing into full padding group tensors)
                     indices = np.array([line.idx_in_group
                                         for line in minibatches[line.group]])
@@ -264,7 +270,7 @@ def iterate_sharded_data(corpus, file_fmt, line_statistics, n_groups,
                     print('trg shapes (after indexing): ', [m.shape for m in trg])
                     # yield it and start a new one
                     yield (src, trg)
-                    groups[line.group] = []
+                    minibatches[line.group] = []
                 # otherwise extend the minibatch
                 minibatches[line.group].append(line)
             for (mb, group) in zip(minibatches, groups):

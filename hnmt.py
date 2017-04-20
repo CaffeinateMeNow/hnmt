@@ -29,12 +29,6 @@ from bnas.utils import softmax_3d
 from bnas.loss import batch_sequence_crossentropy
 from bnas.fun import function
 
-try:
-    from efmaral import align_soft
-except ImportError:
-    print('efmaral is not available, will not be able to use attention loss',
-          file=sys.stderr, flush=True)
-
 def batch_budget(limit,
                  const_weight=0, src_weight=0,
                  trg_weight=1, x_weight=0, unk_weight=0):
@@ -239,7 +233,6 @@ class NMT(Model):
         outputs_mask = T.bmatrix('outputs_mask')
         out_chars = T.lmatrix('out_chars')
         out_chars_mask = T.bmatrix('out_chars_mask')
-        attention = T.tensor3('attention')
 
         self.aux = []
         for (field, vocab_size) in config['trg_encoder'].fields():
@@ -250,7 +243,7 @@ class NMT(Model):
         aux_in = T.matrix('aux_in')     # FIXME: calculations not minibatched!
 
         self.x = [inputs, inputs_mask, chars, chars_mask]
-        self.y = [outputs, outputs_mask, out_chars, out_chars_mask, attention]
+        self.y = [outputs, outputs_mask, out_chars, out_chars_mask]
 
         self.encode_fun = function(self.x, self.encode(*self.x))
         self.xent_fun = function(
@@ -259,7 +252,7 @@ class NMT(Model):
         self.aux_fun = function([aux_in], self.aux_step(aux_in))
 
     def xent(self, inputs, inputs_mask, chars, chars_mask,
-             outputs, outputs_mask, out_chars, out_chars_mask, attention,
+             outputs, outputs_mask, out_chars, out_chars_mask,
              *aux):
         unked_outputs, charlevel_indices = \
             self.config['trg_encoder'].split_unk_outputs(
@@ -296,23 +289,10 @@ class NMT(Model):
             pred_tense, tense[1:], outputs_mask[1:])
         aux_xent *= self.config['aux_cost_weight']
         aux_xent = theano.printing.Print('aux_xent')(aux_xent)
-        # Note that pred_attention will contain zero elements for masked-out
-        # character positions, to avoid trouble with log() we add 1 for zero
-        # element of attention (which after multiplication will be removed
-        # anyway).
-        batch_size = attention.shape[1].astype(theano.config.floatX)
-        attention_mask = (inputs_mask.dimshuffle('x', 1, 0) *
-                          outputs_mask[1:].dimshuffle(0, 1, 'x')
-                          ).astype(theano.config.floatX)
-        epsilon = 1e-6
-        attention_xent = (
-                   -attention[1:]
-                 * T.log(epsilon + pred_attention + (1-attention_mask))
-                 * attention_mask).sum() / batch_size
-        return outputs_xent + char_outputs_xent + aux_xent, attention_xent
+        return outputs_xent + char_outputs_xent + aux_xent
 
     def loss(self, *args):
-        outputs_xent, attention_xent = self.xent(*args)
+        outputs_xent = self.xent(*args)
         return super().loss() + outputs_xent
 
     def unify_embeddings(self, model):
@@ -671,6 +651,7 @@ class NMT(Model):
                 pred_mood, pred_tense)
 
     def create_optimizer(self):
+        print('optimizer expects args: ', self.x, self.y, self.aux)
         return Adam(
                 self.parameters(),
                 self.loss(*(self.x + self.y + self.aux)),
@@ -1168,16 +1149,15 @@ def main():
                 test_x, test_y = batch
                 test_outputs = test_y[0]
                 test_outputs_mask = test_y[1]
-                test_xent, test_xent_attention = model.xent_fun(
+                test_xent = model.xent_fun(
                         *(test_x + test_y))
                 scale = (test_outputs.shape[1] /
                             (test_outputs_mask.sum()*np.log(2)))
                 result += test_xent * scale
-                att_result += test_xent_attention*scale
             print('%d\t%.3f\t%.3f\t%.3f\t%d\t%d' % (
                     int(t0 - start_time),
                     result,
-                    att_result,
+                    0,
                     time() - t0,
                     optimizer.n_updates,
                     sent_nr),
@@ -1212,6 +1192,8 @@ def main():
                 #print('-'*72, flush=True)
 
                 t0 = time()
+                print('args to optimizer x:', [foo.shape for foo in x])
+                print('args to optimizer y:', [foo.shape for foo in y])
                 train_loss = optimizer.step(*(x + y))
                 train_loss *= (y[0].shape[1] / (y[1].sum()*np.log(2)))
                 print('Batch %d:%d of shape %s has loss %.3f (%.2f s)' % (
