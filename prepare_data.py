@@ -147,11 +147,13 @@ class ShardedData(object):
             # savings are not big enough
             split_ok = False
         # size limit is average over shards, doesn't guarantee limit
-        if min(mid, len(lens) - mid) < self.min_lines_per_group * self.n_shards:
+        threshold = lens[mid]
+        below = np.sum(lens < threshold)
+        above = np.sum(lens > threshold)
+        if min(below, above) < self.min_lines_per_group * self.n_shards:
             # too small group
             split_ok = False
         if split_ok:
-            threshold = lens[mid]
             print('splitting {} at {}'.format('target' if trg else 'source', threshold))
             left = self.choose_thresholds(lines[:mid], not trg)
             right = self.choose_thresholds(lines[mid:], not trg)
@@ -163,7 +165,7 @@ class ShardedData(object):
 
 
     def encode(self):
-        print('*** Second pass: collecting statistics')
+        print('*** Second pass: shard, encode, pad and save data')
         for shard in range(self.n_shards):
             print('** shard: {}'.format(shard))
             lines_in_shard = {line.idx: line 
@@ -192,14 +194,20 @@ class ShardedData(object):
                 encoded[group].append((src_enc, trg_enc))
             # pad and concatenate groups
             for (group, pairs) in enumerate(encoded):
-                srcs, trgs = zip(*pairs)
-                padded_src = self.src_encoder.pad_sequences(srcs)
-                padded_trg = self.trg_encoder.pad_sequences(trgs)
-                # save encoded and padded data
                 group_file_name = self.file_fmt.format(
                     corpus=self.corpus,
                     shard=shard,
                     group=group)
+                if len(pairs) == 0:
+                    print('shard {} group {} was empty'.format(shard, group))
+                    with open(group_file_name, 'wb') as fobj:
+                        pickle.dump([],
+                                    fobj, protocol=pickle.HIGHEST_PROTOCOL)
+                    continue
+                srcs, trgs = zip(*pairs)
+                padded_src = self.src_encoder.pad_sequences(srcs)
+                padded_trg = self.trg_encoder.pad_sequences(trgs)
+                # save encoded and padded data
                 n_src_unks = None
                 n_trg_unks = None
                 if len(padded_src) > 2:
