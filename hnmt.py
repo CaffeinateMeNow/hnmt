@@ -417,7 +417,8 @@ class NMT(Model):
                     word_level_seq = hyp.history + (hyp.last_sym,)
                     # FIXME debug
                     print('output of word level decoder:')
-                    print(' '.join(self.config['trg_encoder'].decode_sentence(
+                    word_encoder = self.config['trg_encoder'].sub_encoders['surface']
+                    print(' '.join(word_encoder.decode_sentence(
                         Encoded(word_level_seq, None))))
                     # map from word level decoder states to char level states
                     unk_hs, unk_inits = self.word_to_char_states(hyp.unks, models)
