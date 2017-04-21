@@ -51,8 +51,12 @@ class ShardedData(object):
                  trg_lines,
                  src_encoder,
                  trg_encoder,
+                 src_format,
+                 trg_format,
                  src_max_len=600,
                  trg_max_len=600,
+                 src_max_word_len=50,
+                 trg_max_word_len=50,
                  max_lines_per_shard=1000000,
                  min_lines_per_group=128,
                  min_saved_padding=2048,
@@ -65,8 +69,12 @@ class ShardedData(object):
         # single new-style encoder per side
         self.src_encoder = src_encoder
         self.trg_encoder = trg_encoder
+        self.src_format = src_format
+        self.trg_format = trg_format
         self.src_max_len = src_max_len
         self.trg_max_len = trg_max_len
+        self.src_max_word_len = src_max_word_len
+        self.trg_max_word_len = trg_max_word_len
         self.min_lines_per_group = min_lines_per_group
         self.max_lines_per_shard = max_lines_per_shard
         self.min_saved_padding = min_saved_padding
@@ -96,6 +104,11 @@ class ShardedData(object):
             if src_len > self.src_max_len:
                 continue
             if trg_len > self.trg_max_len:
+                continue
+            # filter out lines with too long words
+            if max(len(word) for word in src.surface) > self.src_max_word_len:
+                continue
+            if max(len(word) for word in trg.surface) > self.trg_max_word_len:
                 continue
             # total line count => shard sizes/num
             # length distribution => thresholds for padding groups
@@ -137,9 +150,9 @@ class ShardedData(object):
         if min(mid, len(lens) - mid) < self.min_lines_per_group * self.n_shards:
             # too small group
             split_ok = False
-        print('mid {} of len {} is {} (limit {})'.format(mid, len(lens), split_ok, self.min_lines_per_group))
         if split_ok:
             threshold = lens[mid]
+            print('splitting {} at {}'.format('target' if trg else 'source', threshold))
             left = self.choose_thresholds(lines[:mid], not trg)
             right = self.choose_thresholds(lines[mid:], not trg)
             return SplitNode(threshold, left, right, trg)
@@ -205,13 +218,22 @@ class ShardedData(object):
             itertools.groupby(
                 sorted(self.line_statistics, key=lambda x: x.shard),
                 lambda x: x.shard))
+        config = {
+            'corpus_name': self.corpus,
+            'shard_file_fmt': self.file_fmt,
+            'shard_n_groups': self.n_groups,
+            'max_source_length': self.src_max_len,
+            'max_target_length': self.trg_max_len,
+            'max_source_word_length': self.src_max_word_len,
+            'max_target_word_length': self.trg_max_word_len,
+            'source_tokenizer': 'char' if self.src_format == 'char' else 'space',
+            'target_tokenizer': 'char' if self.trg_format == 'char' else 'space',
+            'src_encoder': self.src_encoder,
+            'trg_encoder': self.trg_encoder,
+        }
         with open(self.vocab_file_fmt.format(corpus=self.corpus), 'wb') as fobj:
             pickle.dump(
-                [self.corpus,
-                 self.file_fmt,
-                 self.src_encoder, self.trg_encoder,
-                 self.line_statistics,
-                 self.n_groups],
+                [config, self.line_statistics],
                 fobj, protocol=pickle.HIGHEST_PROTOCOL)
 
 def instantiate_mb(group, indices, encoder):
@@ -245,24 +267,26 @@ def instantiate_mb(group, indices, encoder):
                    if field != 'surface')
     return out
 
-def iterate_sharded_data(corpus, file_fmt, line_statistics, n_groups,
-                         budget_func, src_encoder, trg_encoder):
+def iterate_sharded_data(config, shard_line_stats, budget_func):
     while True:
-        shards = list(line_statistics.keys())
+        shards = list(shard_line_stats.keys())
         random.shuffle(shards)
         for shard in shards:
             print('Loading shard {}...'.format(shard))
             # load in the data of the shard
             groups = []
-            for group in range(n_groups):
-                with open(file_fmt.format(
-                        corpus=corpus, shard=shard, group=group), 'rb') as fobj:
+            for group in range(config['shard_n_groups']):
+                group_file_name = config['shard_file_fmt'].format(
+                    corpus=config['corpus_name'],
+                    shard=shard,
+                    group=group)
+                with open(group_file_name, 'rb') as fobj:
                     groups.append(pickle.load(fobj))
             # randomize indices belonging to shard
-            lines = list(line_statistics[shard])
+            lines = list(shard_line_stats[shard])
             random.shuffle(lines)
             # build minibatches group-wise
-            minibatches = [list() for _ in range(n_groups)]
+            minibatches = [list() for _ in range(config['shard_n_groups'])]
             for line in lines:
                 if budget_func(minibatches[line.group], line):
                     # group would become overfull according to budget
@@ -270,8 +294,10 @@ def iterate_sharded_data(corpus, file_fmt, line_statistics, n_groups,
                     # instantiate mb (indexing into full padding group tensors)
                     indices = np.array([line.idx_in_group
                                         for line in minibatches[line.group]])
-                    src = instantiate_mb(groups[line.group][0], indices, src_encoder)
-                    trg = instantiate_mb(groups[line.group][1], indices, trg_encoder)
+                    src = instantiate_mb(
+                        groups[line.group][0], indices, config['src_encoder'])
+                    trg = instantiate_mb(
+                        groups[line.group][1], indices, config['trg_encoder'])
                     #print('src shapes (after indexing): ', [m.shape for m in src])
                     #print('trg shapes (after indexing): ', [m.shape for m in trg])
                     # yield it and start a new one
@@ -282,8 +308,8 @@ def iterate_sharded_data(corpus, file_fmt, line_statistics, n_groups,
             for (mb, group) in zip(minibatches, groups):
                 # yield the unfinished minibatches
                 indices = np.array([line.idx_in_group for line in mb])
-                src = instantiate_mb(group[0], indices, src_encoder)
-                trg = instantiate_mb(group[1], indices, trg_encoder)
+                src = instantiate_mb(group[0], indices, config['src_encoder'])
+                trg = instantiate_mb(group[1], indices, config['trg_encoder'])
                 # yield it and start a new one
                 yield (src, trg)
 
@@ -305,58 +331,72 @@ def main():
 
     parser.add_argument('--source-format', type=str, default='hybrid',
             choices=('char', 'hybrid', 'finnpos'),
-            help='type of preprocessing for source text')
+            help='type of preprocessing for source text '
+            'default "%(default)s"')
     parser.add_argument('--target-format', type=str, default='hybrid',
             choices=('char', 'hybrid', 'finnpos'),
-            help='type of preprocessing for target text')
-    parser.add_argument('--max-source-length', type=int,
+            help='type of preprocessing for target text '
+            'default "%(default)s"')
+    parser.add_argument('--max-source-length', type=int, default=600,
             metavar='N',
-            help='maximum length of source sentence (in tokens)')
-    parser.add_argument('--max-target-length', type=int,
+            help='maximum length of source sentence (in tokens) '
+            'default "%(default)s"')
+    parser.add_argument('--max-target-length', type=int, default=600,
             metavar='N',
-            help='maximum length of target sentence (in tokens)')
-    parser.add_argument('--max-source-word-length', type=int,
+            help='maximum length of target sentence (in tokens) '
+            'default "%(default)s"')
+    parser.add_argument('--max-source-word-length', type=int, default=50,
             metavar='N',
-            help='maximum length of source word in chars')
-    parser.add_argument('--max-target-word-length', type=int,
+            help='maximum length of source word in chars '
+            'default "%(default)s"')
+    parser.add_argument('--max-target-word-length', type=int, default=50,
             metavar='N',
-            help='maximum length of target word in chars')
-    parser.add_argument('--min-char-count', type=int,
+            help='maximum length of target word in chars '
+            'default "%(default)s"')
+    parser.add_argument('--min-char-count', type=int, default=2,
             metavar='N',
-            help='drop all characters with count < N in training data')
+            help='drop all characters with count < N in training data '
+            'default "%(default)s"')
     parser.add_argument('--source-vocabulary', type=int, default=10000,
             metavar='N',
-            help='maximum size of source word-level vocabulary')
+            help='maximum size of source word-level vocabulary '
+            'default "%(default)s"')
     parser.add_argument('--target-vocabulary', type=int, default=10000,
             metavar='N',
-            help='maximum size of target word-level vocabulary')
+            help='maximum size of target word-level vocabulary '
+            'default "%(default)s"')
     parser.add_argument('--lemma-vocabulary', type=int, default=10000,
             metavar='N',
-            help='size of lemma vocabulary for aux task')
+            help='size of lemma vocabulary for aux task '
+            'default "%(default)s"')
     parser.add_argument('--hybrid-vocabulary-overlap', type=int, default=0,
             metavar='N',
             help='overlap vocabularies of word and character-level decoder '
-            'during training with all except this number of least frequent words')
+            'during training with all except this number of least frequent words '
+            'default "%(default)s"')
     parser.add_argument('--max-lines-per-shard', type=int, default=1000000,
             metavar='N',
-            help='Approximate size of the shards, in sentences.')
+            help='Approximate size of the shards, in sentences. '
+            'default "%(default)s"')
     parser.add_argument('--min-lines-per-group', type=int, default=128,
             metavar='N',
             help='Do not split a padding group if the result would contain '
-            'less than this number of sentences.')
+            'less than this number of sentences. '
+            'default "%(default)s"')
     parser.add_argument('--min-saved-padding', type=int, default=2048,
             metavar='N',
             help='Do not split a padding group if the result would save '
-            'less than this number of timesteps of wasted padding.')
-    parser.add_argument('--group-filenames', type=str,
-                default='{corpus}.shard{shard:03}.group{group:03}.pickle',
-                help='Template string for sharded file names. '
-                'Use {corpus}, {shard} and {group}. '
-                'default "%(default)s"')
+            'less than this number of timesteps of wasted padding. '
+            'default "%(default)s"')
+    parser.add_argument('--shard-group-filenames', type=str,
+            default='{corpus}.shard{shard:03}.group{group:03}.pickle',
+            help='Template string for sharded file names. '
+            'Use {corpus}, {shard} and {group}. '
+            'default "%(default)s"')
     parser.add_argument('--vocab-filename', type=str,
-                default='{corpus}.vocab.pickle',
-                help='Template string for vocabulary file name. '
-                'Use {corpus}. default "%(default)s"')
+            default='{corpus}.vocab.pickle',
+            help='Template string for vocabulary file name. '
+            'Use {corpus}. default "%(default)s"')
 
     args = parser.parse_args()
 
@@ -423,10 +463,16 @@ def main():
         trg_reader,
         src_encoder,
         trg_encoder,
+        src_format=args.source_format,
+        trg_format=args.target_format,
+        src_max_len=args.max_source_length,
+        trg_max_len=args.max_target_length,
+        src_max_word_len=args.max_source_word_length,
+        trg_max_word_len=args.max_target_word_length,
         max_lines_per_shard=args.max_lines_per_shard,
         min_lines_per_group=args.min_lines_per_group,
         min_saved_padding=args.min_saved_padding,
-        file_fmt=args.group_filenames,
+        file_fmt=args.shard_group_filenames,
         vocab_file_fmt=args.vocab_filename)
     sharded.prepare_data()
 

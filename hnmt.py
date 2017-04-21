@@ -453,7 +453,7 @@ class NMT(Model):
                             self.config['trg_encoder'].sub_encoder['<S>'],
                             self.config['trg_encoder'].sub_encoder['</S>'],
                             None,
-                            self.config['max_word_length'],
+                            self.config['max_target_word_length'],
                             None,
                             beam_size=beam_size,
                             alpha=0,
@@ -666,9 +666,8 @@ class NMT(Model):
                      for other in others],
                     axis=0))
 
-def read_sents(filename, tokenizer, lower):
+def read_sents(filename, tokenizer):
     def process(line):
-        if lower: line = line.lower()
         if tokenizer == 'char': return line.strip()
         elif tokenizer == 'space': return line.split()
         return word_tokenize(line)
@@ -704,6 +703,14 @@ def main():
             help='name of the model file to save to')
     parser.add_argument('--ensemble-average', action='store_true',
             help='ensemble models by averaging parameters')
+    parser.add_argument('--train', type=str, default=argparse.SUPPRESS,
+            metavar='FILE',
+            help='name of vocab file of sharded data')
+    parser.add_argument('--shard-group-filenames', type=str,
+            metavar='FORMAT_STRING',
+            default=argparse.SUPPRESS,
+            help='Override template string for sharded file names. '
+            'Use {corpus}, {shard} and {group}. ')
     parser.add_argument('--translate', type=str,
             metavar='FILE',
             help='name of file to translate')
@@ -738,9 +745,6 @@ def main():
             metavar='N',
             default=argparse.SUPPRESS,
             help='translate test set every N training batches')
-    parser.add_argument('--train', type=str, default=argparse.SUPPRESS,
-            metavar='FILE',
-            help='name of vocab file of sharded data')
     parser.add_argument('--test-source', type=str, default=argparse.SUPPRESS,
             metavar='FILE',
             help='name of source language test file. '
@@ -837,15 +841,11 @@ def main():
             'translate_every': 250,
             'batch_size': 32,
             'batch_budget': 32,
-            'source_lowercase': 'no',
-            'target_lowercase': 'no',
-            'source_tokenizer': 'space',
-            'target_tokenizer': 'char',
             'max_source_length': None,
             'max_target_length': None,
-            'max_word_length': 30,
-            'source': None,
-            'target': None,
+            'max_source_word_length': 50,
+            'max_target_word_length': 50,
+            'shard_group_filenames': None,
             'test_source': None,
             'test_target': None,
             'beam_size': 8,
@@ -932,15 +932,19 @@ def main():
             for option, default in overridable_options.items():
                 config[option] = args_vars.get(option, default)
 
+        print('reading sharded data...', file=sys.stderr, flush=True)
+        with open(args.train, 'rb') as fobj:
+            shard_config, shard_line_stats = pickle.load(fobj)
+            config.update(shard_config)
+        print('...done', file=sys.stderr, flush=True)
+
         # using the name "test" set, instead of more appropriate
         # development or validation set, for hysterical raisins
         if config['test_source'] is not None:
             test_src_sents = read_sents(
-                    config['test_source'], config['source_tokenizer'],
-                    config['source_lowercase'] == 'yes')
+                    config['test_source'], config['source_tokenizer'])
             #test_trg_sents = read_sents(
-            #        config['test_target'], config['target_tokenizer'],
-            #        config['target_lowercase'] == 'yes')
+            #        config['test_target'], config['target_tokenizer'])
             test_trg_finnpos = list(finnpos_reader(config['test_target'])())
             #assert len(test_src_sents) == len(test_trg_sents)
             assert len(test_src_sents) == len(test_trg_finnpos)
@@ -951,12 +955,6 @@ def main():
         # FIXME tmp: truncating test set
         test_src_sents = test_src_sents[:20]
         test_trg_finnpos = test_trg_finnpos[:20]
-
-        print('reading sharded data...', file=sys.stderr, flush=True)
-        with open(args.train, 'rb') as fobj:
-            corpus, shard_file_fmt, src_encoder, trg_encoder, line_statistics, n_groups = \
-                pickle.load(fobj)
-        print('...done', file=sys.stderr, flush=True)
 
         n_test_sents = len(test_src_sents)
 
@@ -969,8 +967,6 @@ def main():
                     if config['target_tokenizer'] == 'char'
                     else args.word_embedding_dims)
             config.update({
-                'src_encoder': src_encoder,
-                'trg_encoder': trg_encoder,
                 'src_embedding_dims': args.word_embedding_dims,
                 'trg_embedding_dims': trg_embedding_dims,
                 'src_char_embedding_dims': args.char_embedding_dims,
@@ -1082,8 +1078,7 @@ def main():
                 args.output, 'w', encoding='utf-8')
         sents = read_sents(
                 args.translate,
-                config['source_tokenizer'],
-                config['source_lowercase'] == 'yes')
+                config['source_tokenizer'])
         for i,sent in enumerate(translate(sents, encode=True)):
             print('.', file=sys.stderr, flush=True, end='')
             print(sent, file=outf, flush=True)
@@ -1096,14 +1091,16 @@ def main():
         while len(test_src_sents) > 0:
             test_src, test_src_sents = test_src_sents[:config['batch_size']], test_src_sents[config['batch_size']:]
             test_trg, test_trg_finnpos = test_trg_finnpos[:config['batch_size']], test_trg_finnpos[config['batch_size']:]
-            padded_test_src = src_encoder.pad_sequences(
-                [src_encoder.encode_sequence(sent) for sent in test_src])
-            padded_test_trg = trg_encoder.pad_sequences(
-                [trg_encoder.encode_sequence(sent)
+            padded_test_src = config['src_encoder'].pad_sequences(
+                [config['src_encoder'].encode_sequence(sent) for sent in test_src])
+            padded_test_trg = config['trg_encoder'].pad_sequences(
+                [config['trg_encoder'].encode_sequence(sent)
                  for sent in test_trg])
             # len(test_src) gives the actual number of sentences in batch
-            padded_test_src = instantiate_mb(padded_test_src, list(range(len(test_src))), src_encoder)
-            padded_test_trg = instantiate_mb(padded_test_trg, list(range(len(test_trg))), trg_encoder)
+            padded_test_src = instantiate_mb(
+                padded_test_src, list(range(len(test_src))), config['src_encoder'])
+            padded_test_trg = instantiate_mb(
+                padded_test_trg, list(range(len(test_trg))), config['trg_encoder'])
             test_batches.append((padded_test_src, padded_test_trg))
 
         logf = None
@@ -1160,14 +1157,7 @@ def main():
             return result
 
         while time() < end_time:
-            for batch_pairs in iterate_sharded_data(
-                    corpus,
-                    shard_file_fmt,
-                    line_statistics,
-                    n_groups,
-                    budget_func,
-                    src_encoder,
-                    trg_encoder):
+            for batch_pairs in iterate_sharded_data(config, shard_line_stats, budget_func):
                 if logf and batch_nr % config['test_every'] == 0:
                     validate(test_batches, start_time, optimizer, logf, sent_nr)
 
