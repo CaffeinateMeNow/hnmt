@@ -57,9 +57,9 @@ class ShardedData(object):
                  trg_max_len=600,
                  src_max_word_len=50,
                  trg_max_word_len=50,
-                 max_lines_per_shard=1000000,
+                 max_lines_per_shard=500000,
                  min_lines_per_group=128,
-                 min_saved_padding=2048,
+                 min_saved_padding=4096,
                  file_fmt='{corpus}.shard{shard:03}.group{group:03}.pickle',
                  vocab_file_fmt='{corpus}.vocab.pickle'):
         self.corpus = corpus
@@ -206,20 +206,25 @@ class ShardedData(object):
                     continue
                 srcs, trgs = zip(*pairs)
                 padded_src = self.src_encoder.pad_sequences(srcs)
+                del srcs
                 padded_trg = self.trg_encoder.pad_sequences(trgs)
+                del trgs
                 # save encoded and padded data
                 n_src_unks = None
                 n_trg_unks = None
                 if len(padded_src) > 2:
-                    n_src_unks = len(padded_src[2])
+                    n_src_unks = sum(len(x) for x in padded_src[2])
                 if len(padded_trg) > 2:
-                    n_trg_unks = len(padded_trg[2])
+                    n_trg_unks = sum(len(x) for x in padded_trg[2])
                 print('saving shard {} group {} with len ({}, {}) unks ({}, {}) in file {}'.format(
                     shard, group, padded_src[0].shape, padded_trg[0].shape,
                     n_src_unks, n_trg_unks, group_file_name))
                 with open(group_file_name, 'wb') as fobj:
                     pickle.dump([padded_src, padded_trg],
                                 fobj, protocol=pickle.HIGHEST_PROTOCOL)
+                del padded_src
+                del padded_trg
+            del encoded
         # save encoders and stats
         self.line_statistics = dict(
             (shard, list(lines)) for (shard, lines) in 
