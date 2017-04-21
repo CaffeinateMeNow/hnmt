@@ -1,4 +1,4 @@
-from collections import Counter, namedtuple
+from collections import Counter, namedtuple, OrderedDict
 from text import Encoded, TextEncoder, TwoThresholdTextEncoder 
 from utils import *
 
@@ -159,19 +159,19 @@ class FinnposEncoder(object):
         self.max_lemma_vocab = max_lemma_vocab
         self.overlap = overlap
         char_encoder = TextEncoder(min_count=min_char_count)
-        self.sub_encoders = {
-            'surface': TwoThresholdTextEncoder(
+        self.sub_encoders = OrderedDict((
+            ('surface', TwoThresholdTextEncoder(
                 max_vocab=max_vocab,
                 overlap=overlap,
-                sub_encoder=char_encoder),
-            'logf': LogFreqEncoder(),
-            'lemma': TextEncoder(max_vocab=self.max_lemma_vocab),
-            'pos': TextEncoder(),
-            'num': TextEncoder(),
-            'case': TextEncoder(),
-            'pers': TextEncoder(),
-            'mood': TextEncoder(),
-            'tense': TextEncoder()}
+                sub_encoder=char_encoder)),
+            ('logf', LogFreqEncoder()),
+            ('lemma', TextEncoder(max_vocab=self.max_lemma_vocab)),
+            ('pos', TextEncoder()),
+            ('num', TextEncoder()),
+            ('case', TextEncoder()),
+            ('pers', TextEncoder()),
+            ('mood', TextEncoder()),
+            ('tense', TextEncoder())))
 
     @property
     def sub_encoder(self):
@@ -206,13 +206,16 @@ class FinnposEncoder(object):
             )
 
     def __str__(self):
-        return '{}({})'.format(self.__class__.__name__, len(self))
+        return '{}({})'.format(
+            self.__class__.__name__,
+            ', '.join('{}={}'.format(key, sub) for (key, sub)
+                                     in self.sub_encoders.items()))
 
     def __repr__(self):
         return str(self)
 
     def __getitem__(self, token):
-        self.sub_encoders['surface'][token]
+        return self.sub_encoders['surface'][token]
 
     def __len__(self):
         # length of main vocabulary
