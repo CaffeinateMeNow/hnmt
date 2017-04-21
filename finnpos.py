@@ -40,12 +40,15 @@ def finnpos_reader(filename):
             line = line.strip()
             if len(line) == 0:
                 # empty lines indicate sentence breaks
+                if len(raw) == 0:
+                    # ignore double empty line
+                    continue
                 yield finnpos_helper(raw)
                 raw = []
                 continue
-            if line[0] == '#':
-                # comments start with hash
-                continue
+            #if line[0] == '#':
+            #    # comments start with hash
+            #    continue
             raw.append(line.split('\t'))
     return reader
 
