@@ -269,13 +269,13 @@ class FinnposEncoder(object):
         return Aux(
             self.sub_encoders['surface'].decode_sentence(encoded.surface),
             self.sub_encoders['logf'].decode_sentence(encoded.lemma, no_boundary=True),
-            self.sub_encoders['lemma'].decode_sentence(encoded.lemma),
-            self.sub_encoders['pos'].decode_sentence(encoded.pos),
-            self.sub_encoders['num'].decode_sentence(encoded.num),
-            self.sub_encoders['case'].decode_sentence(encoded.case),
-            self.sub_encoders['pers'].decode_sentence(encoded.pers),
-            self.sub_encoders['mood'].decode_sentence(encoded.mood),
-            self.sub_encoders['tense'].decode_sentence(encoded.tense),
+            self.sub_encoders['lemma'].decode_sentence(Encoded(encoded.lemma, None)),
+            self.sub_encoders['pos'].decode_sentence(Encoded(encoded.pos, None)),
+            self.sub_encoders['num'].decode_sentence(Encoded(encoded.num, None)),
+            self.sub_encoders['case'].decode_sentence(Encoded(encoded.case, None)),
+            self.sub_encoders['pers'].decode_sentence(Encoded(encoded.pers, None)),
+            self.sub_encoders['mood'].decode_sentence(Encoded(encoded.mood, None)),
+            self.sub_encoders['tense'].decode_sentence(Encoded(encoded.tense, None)),
         )
 
     def decode_padded(self, m, mask, chars, char_mask, *aux):

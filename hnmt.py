@@ -708,8 +708,7 @@ def main():
             metavar='FILE',
             help='name of vocab file of sharded data')
     parser.add_argument('--shard-group-filenames', type=str,
-            dest='shard_file_fmt', metavar='FORMAT_STRING',
-            default=argparse.SUPPRESS,
+            dest='shard_file_fmt', metavar='FORMAT_STRING', default=None,
             help='Override template string for sharded file names. '
             'Use {corpus}, {shard} and {group}. ')
     parser.add_argument('--translate', type=str,
