@@ -708,7 +708,7 @@ def main():
             metavar='FILE',
             help='name of vocab file of sharded data')
     parser.add_argument('--shard-group-filenames', type=str,
-            metavar='FORMAT_STRING',
+            dest='shard_file_fmt', metavar='FORMAT_STRING',
             default=argparse.SUPPRESS,
             help='Override template string for sharded file names. '
             'Use {corpus}, {shard} and {group}. ')
@@ -846,7 +846,7 @@ def main():
             'max_target_length': None,
             'max_source_word_length': 50,
             'max_target_word_length': 50,
-            'shard_group_filenames': None,
+            'shard_file_fmt': None,
             'test_source': None,
             'test_target': None,
             'beam_size': 8,
@@ -937,6 +937,9 @@ def main():
         with open(args.train, 'rb') as fobj:
             shard_config, shard_line_stats = pickle.load(fobj)
             config.update(shard_config)
+        if args.shard_file_fmt is not None:
+            # override from command line
+            config['shard_file_fmt'] = args.shard_file_fmt
         print('...done', file=sys.stderr, flush=True)
 
         # using the name "test" set, instead of more appropriate
