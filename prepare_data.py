@@ -281,7 +281,9 @@ def instantiate_mb(group, indices, encoder):
     return out
 
 def iterate_sharded_data(config, shard_line_stats, budget_func):
+    epoch = 0   # FIXME: integrate with old epoch counting
     while True:
+        print('Starting epoch {}'.format(epoch))
         shards = list(shard_line_stats.keys())
         random.shuffle(shards)
         for shard in shards:
@@ -325,6 +327,7 @@ def iterate_sharded_data(config, shard_line_stats, budget_func):
                 trg = instantiate_mb(group[1], indices, config['trg_encoder'])
                 # yield it and start a new one
                 yield (src, trg)
+        epoch += 1
 
 
 def main():
