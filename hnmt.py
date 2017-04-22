@@ -951,14 +951,13 @@ def main():
             #        config['test_target'], config['target_tokenizer'])
             test_trg_finnpos = list(finnpos_reader(config['test_target'])())
             #assert len(test_src_sents) == len(test_trg_sents)
-            assert len(test_src_sents) == len(test_trg_finnpos)
+            assert len(test_src_sents) == len(test_trg_finnpos) \
+                'test src {} lines, test trg {} lines'.format(
+                    len(test_src_sents), len(test_trg_finnpos))
         else:
             test_src_sents = []
             test_trg_sents = []
             test_trg_finnpos = []
-        # FIXME tmp: truncating test set
-        test_src_sents = test_src_sents[:20]
-        test_trg_finnpos = test_trg_finnpos[:20]
 
         n_test_sents = len(test_src_sents)
 
