@@ -144,9 +144,9 @@ class TextEncoder(object):
             encoded_sequences -- a list of Encoded(encoded, unknowns) tuples.
         """
         if not encoded_sequences:
-            # An empty matrix would mess up things, so create a dummy 1x1
+            # An empty matrix would mess up things, so create a dummy 2x1
             # matrix with an empty mask in case the sequence list is empty.
-            m = np.zeros((1 if max_length is None else max_length, 1),
+            m = np.zeros((2 if max_length is None else max_length, 1),
                          dtype=dtype)
             mask = np.zeros_like(m, dtype=np.bool)
             return m, mask
@@ -156,6 +156,7 @@ class TextEncoder(object):
             pass
 
         length = max((len(x[0]) for x in encoded_sequences))
+        length = max(2, length) # cannot scan over zero length
         length = length if max_length is None else min(length, max_length)
 
         m = np.zeros((length, len(encoded_sequences)), dtype=dtype)
@@ -210,7 +211,10 @@ class TextEncoder(object):
         # Compute separate mask for character level (UNK) words
         # (with symbol < 0).
         charlevel_mask = outputs_mask * T.lt(outputs, 0)
-        charlevel_indices = T.nonzero(charlevel_mask.T)
+        # ensure that char-level is never empty
+        dummy = 1 - T.sum(charlevel_mask).clip(0, 1)
+        dummy_mask = T.inc_subtensor(charlevel_mask[0,0], dummy)
+        charlevel_indices = T.nonzero(dummy_mask.T)
         # shortlisted words directly in word level decoder,
         # but char level replaced with unk
         unked_outputs = (1 - charlevel_mask) * outputs
@@ -294,6 +298,9 @@ class TwoThresholdTextEncoder(TextEncoder):
         # lower threshold used for indexing tensor for charlevel
         lthr = T.as_tensor(self.low_thresh)
         low_charlevel_mask = charlevel_mask + (outputs_mask * T.gt(outputs, lthr))
+        # ensure that char-level is never empty
+        dummy = 1 - T.sum(low_charlevel_mask).clip(0, 1)
+        low_charlevel_mask = T.inc_subtensor(low_charlevel_mask[0,0], dummy)
         low_charlevel_indices = T.nonzero(low_charlevel_mask.T)
         # higher threshold used for
         # shortlisted words directly in word level decoder,
