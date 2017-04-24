@@ -279,6 +279,10 @@ class TwoThresholdTextEncoder(TextEncoder):
                 if idx is None:
                     idx = low_idx
             return idx
+        try:
+            sequence = sequence.surface
+        except AttributeError:
+            pass
         encoded = tuple(idx for idx in list(map(encode_item, sequence))
                         if idx is not None)
         if max_length is None \

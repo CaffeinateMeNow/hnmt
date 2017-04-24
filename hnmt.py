@@ -121,23 +121,23 @@ class NMT(Model):
             dropout=config['dropout'],
             layernorm=config['layernorm']))
 
-# FIXME: flag
-        # logf, lemma, pos, num, case, pers, mood, tense
-        self.add(Linear(
-            'aux_hidden',
-            2 * config['decoder_state_dims'],
-            config['aux_dims'],
-            dropout=config['dropout'],
-            layernorm=config['layernorm']))
-
-        for (field, vocab_size) in config['trg_encoder'].fields():
-            if field == 'surface':
-                # already handled
-                continue
+        if config['use_aux']:
+            # logf, lemma, pos, num, case, pers, mood, tense
             self.add(Linear(
-                '{}_emission'.format(field),
+                'aux_hidden',
+                2 * config['decoder_state_dims'],
                 config['aux_dims'],
-                vocab_size))
+                dropout=config['dropout'],
+                layernorm=config['layernorm']))
+
+            for (field, vocab_size) in config['trg_encoder'].fields():
+                if field == 'surface':
+                    # already handled
+                    continue
+                self.add(Linear(
+                    '{}_emission'.format(field),
+                    config['aux_dims'],
+                    vocab_size))
 
         for prefix, backwards in (('fwd', False), ('back', True)):
             self.add(LSTMSequence(
@@ -240,12 +240,12 @@ class NMT(Model):
         out_chars_mask = T.bmatrix('out_chars_mask')
 
         self.aux = []
-        for (field, vocab_size) in config['trg_encoder'].fields():
-            if field == 'surface':
-                # already handled
-                continue
-            self.aux.append(T.lmatrix(field))
-        aux_in = T.matrix('aux_in')     # FIXME: calculations not minibatched!
+        if config['use_aux']:
+            for (field, vocab_size) in config['trg_encoder'].fields():
+                if field == 'surface':
+                    # already handled
+                    continue
+                self.aux.append(T.lmatrix(field))
 
         self.x = [inputs, inputs_mask, chars, chars_mask]
         self.y = [outputs, outputs_mask, out_chars, out_chars_mask]
@@ -254,7 +254,10 @@ class NMT(Model):
         self.xent_fun = function(
             self.x + self.y + self.aux,
             self.xent(*(self.x + self.y + self.aux)))
-        self.aux_fun = function([aux_in], self.aux_step(aux_in))
+
+        if config['use_aux']:
+            aux_in = T.matrix('aux_in')     # FIXME: calculations not minibatched!
+            self.aux_fun = function([aux_in], self.aux_step(aux_in))
 
     def xent(self, inputs, inputs_mask, chars, chars_mask,
              outputs, outputs_mask, out_chars, out_chars_mask,
@@ -262,41 +265,42 @@ class NMT(Model):
         unked_outputs, charlevel_indices = \
             self.config['trg_encoder'].split_unk_outputs(
                 outputs, outputs_mask)
-# FIXME: flag
-        #pred_outputs, pred_char_outputs, pred_attention = self(
         (pred_outputs, pred_char_outputs, pred_attention, 
          pred_logf, pred_lemma, pred_pos,
          pred_num, pred_case, pred_pers,
-         pred_mood, pred_tense) = \
-            self.predict_aux(
+         pred_mood, pred_tense) = self.predict_aux(
                 inputs, inputs_mask, chars, chars_mask,
                 unked_outputs, charlevel_indices, outputs_mask,
-                out_chars, out_chars_mask)
+                out_chars, out_chars_mask,
+                do_aux=self.config['use_aux'])
         outputs_xent = batch_sequence_crossentropy(
                 pred_outputs, unked_outputs[1:], outputs_mask[1:])
         char_outputs_xent = batch_sequence_crossentropy(
                 pred_char_outputs, out_chars[1:], out_chars_mask[1:])
-        # aux costs
-        logf, lemma, pos, num, case, pers, mood, tense = aux
-        aux_xent = batch_sequence_crossentropy(
-            pred_logf, logf[1:], outputs_mask[1:])
-        aux_xent += batch_sequence_crossentropy(
-            pred_lemma, lemma[1:], outputs_mask[1:])
-        aux_xent += batch_sequence_crossentropy(
-            pred_pos, pos[1:], outputs_mask[1:])
-        aux_xent += batch_sequence_crossentropy(
-            pred_num, num[1:], outputs_mask[1:])
-        aux_xent += batch_sequence_crossentropy(
-            pred_case, case[1:], outputs_mask[1:])
-        aux_xent += batch_sequence_crossentropy(
-            pred_pers, pers[1:], outputs_mask[1:])
-        aux_xent += batch_sequence_crossentropy(
-            pred_mood, mood[1:], outputs_mask[1:])
-        aux_xent += batch_sequence_crossentropy(
-            pred_tense, tense[1:], outputs_mask[1:])
-        aux_xent *= self.config['aux_cost_weight']
-        aux_xent = theano.printing.Print('aux_xent')(aux_xent)
-        return outputs_xent + char_outputs_xent + aux_xent
+        total_xent = outputs_xent + char_outputs_xent
+        if self.config['use_aux']:
+            # aux costs
+            logf, lemma, pos, num, case, pers, mood, tense = aux
+            aux_xent = batch_sequence_crossentropy(
+                pred_logf, logf[1:], outputs_mask[1:])
+            aux_xent += batch_sequence_crossentropy(
+                pred_lemma, lemma[1:], outputs_mask[1:])
+            aux_xent += batch_sequence_crossentropy(
+                pred_pos, pos[1:], outputs_mask[1:])
+            aux_xent += batch_sequence_crossentropy(
+                pred_num, num[1:], outputs_mask[1:])
+            aux_xent += batch_sequence_crossentropy(
+                pred_case, case[1:], outputs_mask[1:])
+            aux_xent += batch_sequence_crossentropy(
+                pred_pers, pers[1:], outputs_mask[1:])
+            aux_xent += batch_sequence_crossentropy(
+                pred_mood, mood[1:], outputs_mask[1:])
+            aux_xent += batch_sequence_crossentropy(
+                pred_tense, tense[1:], outputs_mask[1:])
+            aux_xent *= self.config['aux_cost_weight']
+            aux_xent = theano.printing.Print('aux_xent')(aux_xent)
+            total_xent += aux_xent
+        return total_xent
 
     def loss(self, *args):
         outputs_xent = self.xent(*args)
@@ -427,8 +431,10 @@ class NMT(Model):
                     word_level_seq = hyp.history + (hyp.last_sym,)
                     # FIXME debug
                     print('output of word level decoder:')
-# FIXME: flag
-                    word_encoder = self.config['trg_encoder'].sub_encoders['surface']
+                    if config['use_aux']:
+                        word_encoder = self.config['trg_encoder'].sub_encoders['surface']
+                    else:
+                        word_encoder = self.config['trg_encoder']
                     print(' '.join(word_encoder.decode_sentence(
                         Encoded(word_level_seq, None))))
                     # map from word level decoder states to char level states
@@ -840,6 +846,8 @@ def main():
     parser.add_argument('--random-seed', type=int, default=123,
             metavar='N',
             help='random seed for repeatable sorting of data')
+    parser.add_argument('--use-aux', default=False, action='store_true',
+            help='use aux task in training')
     parser.add_argument('--aux-cost-weight', type=float, default=argparse.SUPPRESS,
             metavar='X',
             help='weight of aux loss')
@@ -963,17 +971,17 @@ def main():
         if config['test_source'] is not None:
             test_src_sents = read_sents(
                     config['test_source'], config['source_tokenizer'])
-            #test_trg_sents = read_sents(
-            #        config['test_target'], config['target_tokenizer'])
-            test_trg_finnpos = list(finnpos_reader(config['test_target'])())
-            #assert len(test_src_sents) == len(test_trg_sents)
-            assert len(test_src_sents) == len(test_trg_finnpos), \
+            if config['trg_format'] == 'finnpos':
+                test_trg_sents = list(finnpos_reader(config['test_target'])())
+            else:
+                test_trg_sents = read_sents(
+                        config['test_target'], config['target_tokenizer'])
+            assert len(test_src_sents) == len(test_trg_sents), \
                 'test src {} lines, test trg {} lines'.format(
-                    len(test_src_sents), len(test_trg_finnpos))
+                    len(test_src_sents), len(test_trg_sents))
         else:
             test_src_sents = []
             test_trg_sents = []
-            test_trg_finnpos = []
 
         n_test_sents = len(test_src_sents)
 
@@ -1011,6 +1019,7 @@ def main():
                     'ba2' if args.layer_normalization else False,
                 'decoder_layernorm':
                     'ba2' if args.layer_normalization else False,
+                'use_aux': args.use_aux,
                 })
 
             model = NMT('nmt', config)
@@ -1054,7 +1063,7 @@ def main():
                 others=models[1:],
                 expand_n=config['hybrid_expand_n'],
                 char_cost_weight=config['hybrid_char_cost_weight'],
-                decode_aux=True)
+                decode_aux=config['use_aux'])
         decoded_src = config['src_encoder'].decode_padded(*translate_src)
         decoded_trg = config['trg_encoder'].decode_padded(*translate_trg)
 
@@ -1109,12 +1118,11 @@ def main():
         test_batches = []
         while len(test_src_sents) > 0:
             test_src, test_src_sents = test_src_sents[:config['batch_size']], test_src_sents[config['batch_size']:]
-            test_trg, test_trg_finnpos = test_trg_finnpos[:config['batch_size']], test_trg_finnpos[config['batch_size']:]
+            test_trg, test_trg_sents = test_trg_sents[:config['batch_size']], test_trg_sents[config['batch_size']:]
             padded_test_src = config['src_encoder'].pad_sequences(
                 [config['src_encoder'].encode_sequence(sent) for sent in test_src])
             padded_test_trg = config['trg_encoder'].pad_sequences(
-                [config['trg_encoder'].encode_sequence(sent)
-                 for sent in test_trg])
+                [config['trg_encoder'].encode_sequence(sent) for sent in test_trg])
             # len(test_src) gives the actual number of sentences in batch
             padded_test_src = instantiate_mb(
                 padded_test_src, list(range(len(test_src))), config['src_encoder'])

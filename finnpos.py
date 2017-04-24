@@ -104,33 +104,33 @@ class LogFreqEncoder(object):
             out = start + encoded[:max_length-(len(start)+len(stop))] + stop
         return Encoded(np.asarray(out, dtype=dtype), None)
 
-    def pad_sequences(self, sequences,
-                      max_length=None, pad_right=True, dtype=np.int32):
-        if not sequences:
-            # An empty matrix would mess up things, so create a dummy 1x1
-            # matrix with an empty mask in case the sequence list is empty.
-            m = np.zeros((1 if max_length is None else max_length, 1),
-                         dtype=dtype)
-            mask = np.zeros_like(m, dtype=np.bool)
-            return m, mask
-        encoded_sequences = [
-                self.encode_sequence(sequence, max_length)
-                for sequence in sequences]
-        length = max(map(len, encoded_sequences))
-        length = length if max_length is None else min(length, max_length)
+    #def pad_sequences(self, sequences,
+    #                  max_length=None, pad_right=True, dtype=np.int32):
+    #    if not sequences:
+    #        # An empty matrix would mess up things, so create a dummy 1x1
+    #        # matrix with an empty mask in case the sequence list is empty.
+    #        m = np.zeros((1 if max_length is None else max_length, 1),
+    #                     dtype=dtype)
+    #        mask = np.zeros_like(m, dtype=np.bool)
+    #        return m, mask
+    #    encoded_sequences = [
+    #            self.encode_sequence(sequence, max_length)
+    #            for sequence in sequences]
+    #    length = max(map(len, encoded_sequences))
+    #    length = length if max_length is None else min(length, max_length)
 
-        m = np.zeros((length, len(sequences)), dtype=dtype)
-        mask = np.zeros_like(m, dtype=np.bool)
+    #    m = np.zeros((length, len(sequences)), dtype=dtype)
+    #    mask = np.zeros_like(m, dtype=np.bool)
 
-        for i,encoded in enumerate(encoded_sequences):
-            if pad_right:
-                m[:len(encoded),i] = encoded
-                mask[:len(encoded),i] = 1
-            else:
-                m[-len(encoded):,i] = encoded
-                mask[-len(encoded):,i] = 1
+    #    for i,encoded in enumerate(encoded_sequences):
+    #        if pad_right:
+    #            m[:len(encoded),i] = encoded
+    #            mask[:len(encoded),i] = 1
+    #        else:
+    #            m[-len(encoded):,i] = encoded
+    #            mask[-len(encoded):,i] = 1
 
-        return m, mask
+    #    return m, mask
 
     def decode_sentence(self, encoded, no_boundary=False):
         try:

@@ -243,6 +243,8 @@ class ShardedData(object):
             'target_tokenizer': 'char' if self.trg_format == 'char' else 'space',
             'src_encoder': self.src_encoder,
             'trg_encoder': self.trg_encoder,
+            'src_format': self.src_format,
+            'trg_format': self.trg_format,
         }
         with open(self.vocab_file_fmt.format(corpus=self.corpus), 'wb') as fobj:
             pickle.dump(
