@@ -1057,9 +1057,9 @@ def main():
                     expand_n=config['hybrid_expand_n'],
                     char_cost_weight=config['hybrid_char_cost_weight'])
             for sentence in sentences:
-                encoded = sentence[0]
+                encoded = Surface(sentence[0])
                 yield detokenize(
-                    config['trg_encoder'].decode_sentence(encoded),
+                    config['trg_encoder'].decode_sentence(encoded, raw=True),
                     config['target_tokenizer'])
 
     def monitor(translate_src, translate_trg):

@@ -267,7 +267,7 @@ class FinnposEncoder(object):
 
     def decode_sentence(self, encoded, raw=False):
         return Aux(
-            self.sub_encoders['surface'].decode_sentence(encoded.surface),
+            self.sub_encoders['surface'].decode_sentence(encoded.surface, raw=True),
             self.sub_encoders['logf'].decode_sentence(encoded.lemma, no_boundary=True, raw=True),
             self.sub_encoders['lemma'].decode_sentence(Encoded(encoded.lemma, None), raw=True),
             self.sub_encoders['pos'].decode_sentence(Encoded(encoded.pos, None), raw=True),
