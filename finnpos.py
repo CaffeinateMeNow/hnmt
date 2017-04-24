@@ -132,7 +132,7 @@ class LogFreqEncoder(object):
 
     #    return m, mask
 
-    def decode_sentence(self, encoded, no_boundary=False):
+    def decode_sentence(self, encoded, no_boundary=False, raw=True):
         try:
             seq = encoded.sequence
         except AttributeError:
@@ -269,13 +269,13 @@ class FinnposEncoder(object):
         return Aux(
             self.sub_encoders['surface'].decode_sentence(encoded.surface),
             self.sub_encoders['logf'].decode_sentence(encoded.lemma, no_boundary=True, raw=True),
-            self.sub_encoders['lemma'].decode_sentence(Encoded(encoded.lemma, None, raw=True)),
-            self.sub_encoders['pos'].decode_sentence(Encoded(encoded.pos, None, raw=True)),
-            self.sub_encoders['num'].decode_sentence(Encoded(encoded.num, None, raw=True)),
-            self.sub_encoders['case'].decode_sentence(Encoded(encoded.case, None, raw=True)),
-            self.sub_encoders['pers'].decode_sentence(Encoded(encoded.pers, None, raw=True)),
-            self.sub_encoders['mood'].decode_sentence(Encoded(encoded.mood, None, raw=True)),
-            self.sub_encoders['tense'].decode_sentence(Encoded(encoded.tense, None, raw=True)),
+            self.sub_encoders['lemma'].decode_sentence(Encoded(encoded.lemma, None), raw=True),
+            self.sub_encoders['pos'].decode_sentence(Encoded(encoded.pos, None), raw=True),
+            self.sub_encoders['num'].decode_sentence(Encoded(encoded.num, None), raw=True),
+            self.sub_encoders['case'].decode_sentence(Encoded(encoded.case, None), raw=True),
+            self.sub_encoders['pers'].decode_sentence(Encoded(encoded.pers, None), raw=True),
+            self.sub_encoders['mood'].decode_sentence(Encoded(encoded.mood, None), raw=True),
+            self.sub_encoders['tense'].decode_sentence(Encoded(encoded.tense, None), raw=True),
         )
 
     def decode_padded(self, m, mask, chars, char_mask, *aux):

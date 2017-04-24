@@ -423,6 +423,7 @@ class NMT(Model):
 
         # character level decoding
         all_expanded = []
+        all_aux = []
         for (sent_idx, beam) in word_level:
             expanded_hyps = []
             try:
@@ -965,6 +966,11 @@ def main():
         if args.shard_file_fmt is not None:
             # override from command line
             config['shard_file_fmt'] = args.shard_file_fmt
+        if 'trg_format' not in config:
+            # FIXME: hack for sharded data without format
+            print('WARNING: trg_format was missing from sharded data. '
+                'Assuming "finnpos"')
+            config['trg_format'] = 'finnpos'
         if config['trg_format'] == 'finnpos' and not args.use_aux:
             raise Exception('Target is in finnpos format, '
                 'but aux task not enabled. Set --use-aux.')
@@ -1104,6 +1110,9 @@ def main():
                     if field == 'surface':
                         continue
                     else:
+                        if field != 'lemma':
+                            seq = ['{:8}'.format(x[:8])
+                                   for x in seq]
                         print(' '.join(seq))
                 print('-'*72)
                 # pred aux
@@ -1111,6 +1120,9 @@ def main():
                     if field == 'surface':
                         continue
                     else:
+                        if field != 'lemma':
+                            seq = ['{:8}'.format(x[:8])
+                                   for x in seq]
                         print(' '.join(seq))
                 print('='*72)
 
