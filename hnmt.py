@@ -251,6 +251,7 @@ class NMT(Model):
         self.y = [outputs, outputs_mask, out_chars, out_chars_mask]
 
         self.encode_fun = function(self.x, self.encode(*self.x))
+        #print('xent_fun expects args: ', self.x, self.y, self.aux)
         self.xent_fun = function(
             self.x + self.y + self.aux,
             self.xent(*(self.x + self.y + self.aux)))
@@ -431,12 +432,12 @@ class NMT(Model):
                     word_level_seq = hyp.history + (hyp.last_sym,)
                     # FIXME debug
                     print('output of word level decoder:')
-                    if config['use_aux']:
+                    if self.config['use_aux']:
                         word_encoder = self.config['trg_encoder'].sub_encoders['surface']
                     else:
                         word_encoder = self.config['trg_encoder']
                     print(' '.join(word_encoder.decode_sentence(
-                        Encoded(word_level_seq, None))))
+                        Encoded(word_level_seq, None), raw=True)))
                     # map from word level decoder states to char level states
                     unk_hs, unk_inits = self.word_to_char_states(hyp.unks, models)
 
@@ -964,6 +965,9 @@ def main():
         if args.shard_file_fmt is not None:
             # override from command line
             config['shard_file_fmt'] = args.shard_file_fmt
+        if config['trg_format'] == 'finnpos' and not args.use_aux:
+            raise Exception('Target is in finnpos format, '
+                'but aux task not enabled. Set --use-aux.')
         print('...done', file=sys.stderr, flush=True)
 
         # using the name "test" set, instead of more appropriate
@@ -1053,8 +1057,7 @@ def main():
                     config['target_tokenizer'])
 
     def monitor(translate_src, translate_trg):
-        # FIXME; config['max_target_length'] is Null. Need to save it when preparing data. add config dict?
-        sentences, auxes = model.search(
+        result = model.search(
                 *(tuple(translate_src) + (config['max_target_length'],)),
                 beam_size=config['beam_size'],
                 alpha=config['alpha'],
@@ -1066,15 +1069,25 @@ def main():
                 decode_aux=config['use_aux'])
         decoded_src = config['src_encoder'].decode_padded(*translate_src)
         decoded_trg = config['trg_encoder'].decode_padded(*translate_trg)
+        if config['use_aux']:
+            sentences, auxes = result
+            tupletype = Aux
+            #logf, lemma, pos, num, case, pers, mood, tense = aux
+        else:
+            sentences = result
+            auxes = [list() for _ in sentences]
+            tupletype = Surface
 
         for (src, trg, sentence, aux) in zip(decoded_src, decoded_trg, sentences, auxes):
             encoded = sentence[0]   # extract best sentence
             # aux is already 1-best
-            #logf, lemma, pos, num, case, pers, mood, tense = aux
-            translation = Aux(encoded, *aux)
+            translation = tupletype(encoded, *aux)
             decoded_translation = config['trg_encoder'].decode_sentence(translation)
 
-            print('   SOURCE / TARGET / OUTPUT / gold AUXes / pred AUXes')
+            if config['use_aux']:
+                print('   SOURCE / TARGET / OUTPUT / gold AUXes / pred AUXes')
+            else:
+                print('   SOURCE / TARGET / OUTPUT')
             print(detokenize(
                 src.surface,
                 config['source_tokenizer']))
@@ -1085,20 +1098,21 @@ def main():
                 decoded_translation.surface,
                 config['target_tokenizer']))
             print('-'*72)
-            # gold aux
-            for (field, seq) in zip(trg._fields, trg):
-                if field == 'surface':
-                    continue
-                else:
-                    print(' '.join(seq))
-            print('-'*72)
-            # pred aux
-            for (field, seq) in zip(decoded_translation._fields, decoded_translation):
-                if field == 'surface':
-                    continue
-                else:
-                    print(' '.join(seq))
-            print('='*72)
+            if config['use_aux']:
+                # gold aux
+                for (field, seq) in zip(trg._fields, trg):
+                    if field == 'surface':
+                        continue
+                    else:
+                        print(' '.join(seq))
+                print('-'*72)
+                # pred aux
+                for (field, seq) in zip(decoded_translation._fields, decoded_translation):
+                    if field == 'surface':
+                        continue
+                    else:
+                        print(' '.join(seq))
+                print('='*72)
 
     if args.translate:
         print('Translating...', file=sys.stderr, flush=True, end='')
@@ -1172,7 +1186,6 @@ def main():
                 scale = (test_outputs.shape[1] /
                             (test_outputs_mask.sum()*np.log(2)))
                 result += test_xent * scale
-                att_result += test_xent_attention*scale
             print('%d\t%.3f\t%.3f\t%.3f\t%d\t%d' % (
                     int(t0 - start_time),
                     result,

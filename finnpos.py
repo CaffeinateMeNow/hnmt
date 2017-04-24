@@ -265,17 +265,17 @@ class FinnposEncoder(object):
                     out[j][-len(encoded):,i] = encoded
         return padded_surf + (out,)
 
-    def decode_sentence(self, encoded):
+    def decode_sentence(self, encoded, raw=False):
         return Aux(
             self.sub_encoders['surface'].decode_sentence(encoded.surface),
-            self.sub_encoders['logf'].decode_sentence(encoded.lemma, no_boundary=True),
-            self.sub_encoders['lemma'].decode_sentence(Encoded(encoded.lemma, None)),
-            self.sub_encoders['pos'].decode_sentence(Encoded(encoded.pos, None)),
-            self.sub_encoders['num'].decode_sentence(Encoded(encoded.num, None)),
-            self.sub_encoders['case'].decode_sentence(Encoded(encoded.case, None)),
-            self.sub_encoders['pers'].decode_sentence(Encoded(encoded.pers, None)),
-            self.sub_encoders['mood'].decode_sentence(Encoded(encoded.mood, None)),
-            self.sub_encoders['tense'].decode_sentence(Encoded(encoded.tense, None)),
+            self.sub_encoders['logf'].decode_sentence(encoded.lemma, no_boundary=True, raw=True),
+            self.sub_encoders['lemma'].decode_sentence(Encoded(encoded.lemma, None, raw=True)),
+            self.sub_encoders['pos'].decode_sentence(Encoded(encoded.pos, None, raw=True)),
+            self.sub_encoders['num'].decode_sentence(Encoded(encoded.num, None, raw=True)),
+            self.sub_encoders['case'].decode_sentence(Encoded(encoded.case, None, raw=True)),
+            self.sub_encoders['pers'].decode_sentence(Encoded(encoded.pers, None, raw=True)),
+            self.sub_encoders['mood'].decode_sentence(Encoded(encoded.mood, None, raw=True)),
+            self.sub_encoders['tense'].decode_sentence(Encoded(encoded.tense, None, raw=True)),
         )
 
     def decode_padded(self, m, mask, chars, char_mask, *aux):

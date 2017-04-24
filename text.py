@@ -124,18 +124,22 @@ class TextEncoder(object):
             return out
         return Surface(out)
 
-    def decode_sentence(self, encoded):
+    def decode_sentence(self, encoded, raw=False):
         try:
             encoded = encoded.surface
         except AttributeError:
             pass
         start = self.index.get('<S>')
         stop = self.index.get('</S>')
-        return [''.join(self.sub_encoder.decode_sentence(
-                    encoded.unknown[-x-1]))
+        result = [''.join(self.sub_encoder.decode_sentence(
+                    encoded.unknown[-x-1], raw=True))
                 if x < 0 else self.vocab[x]
                 for x in encoded.sequence
                 if x not in (start, stop)]
+        if raw:
+            return result
+        else:
+            return Surface(result)
 
     def pad_sequences(self, encoded_sequences,
                       max_length=None, pad_right=True, dtype=np.int32, pad_chars=False):
