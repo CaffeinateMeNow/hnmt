@@ -121,6 +121,7 @@ class NMT(Model):
             dropout=config['dropout'],
             layernorm=config['layernorm']))
 
+# FIXME: flag
         # logf, lemma, pos, num, case, pers, mood, tense
         self.add(Linear(
             'aux_hidden',
@@ -195,12 +196,16 @@ class NMT(Model):
             decoder_units,
             backwards=False, offset=-1))
 
+        print('using attentional character-level decoder',
+              file=sys.stderr, flush=True)  # FIXME: add flag
         char_decoder_units = [LSTMUnit(
             'char_decoder',
             config['src_char_embedding_dims'] + config['decoder_state_dims'],
             config['char_decoder_state_dims'],
             layernorm=config['decoder_layernorm'],
             dropout=config['recurrent_dropout'],
+            attention_dims=config['attention_dims'],
+            attended_dims=2*config['encoder_state_dims'],
             trainable_initial=True)]
         for i in range(config['char_decoder_residual_layers']):
             char_decoder_units.append(
@@ -257,6 +262,8 @@ class NMT(Model):
         unked_outputs, charlevel_indices = \
             self.config['trg_encoder'].split_unk_outputs(
                 outputs, outputs_mask)
+# FIXME: flag
+        #pred_outputs, pred_char_outputs, pred_attention = self(
         (pred_outputs, pred_char_outputs, pred_attention, 
          pred_logf, pred_lemma, pred_pos,
          pred_num, pred_case, pred_pers,
@@ -339,6 +346,7 @@ class NMT(Model):
         models_init = []
         models_attended = []
         non_sequences = []
+        char_non_sequences = []
         for m in models:
             h_0, c_0, attended = m.encode_fun(
                 inputs, inputs_mask, chars, chars_mask)
@@ -347,6 +355,9 @@ class NMT(Model):
                 include_nones=False, do_eval=True))
             models_attended.append(attended)
             non_sequences.append(m.decoder.make_nonsequences(
+                [attended, inputs_mask],
+                include_params=False, do_eval=True))
+            char_non_sequences.append(m.char_decoder.make_nonsequences(
                 [attended, inputs_mask],
                 include_params=False, do_eval=True))
 
@@ -407,8 +418,7 @@ class NMT(Model):
 
         # character level decoding
         all_expanded = []
-        all_aux = []
-        for (_, beam) in word_level:
+        for (sent_idx, beam) in word_level:
             expanded_hyps = []
             try:
                 for i in range(expand_n):
@@ -417,6 +427,7 @@ class NMT(Model):
                     word_level_seq = hyp.history + (hyp.last_sym,)
                     # FIXME debug
                     print('output of word level decoder:')
+# FIXME: flag
                     word_encoder = self.config['trg_encoder'].sub_encoders['surface']
                     print(' '.join(word_encoder.decode_sentence(
                         Encoded(word_level_seq, None))))
@@ -434,6 +445,9 @@ class NMT(Model):
                                     outputs_mask]
                             # add stored recurrent inputs
                             args.extend(states[idx])
+                            sent_idx_arr = np.array([sent_idx] * len(word_indices))
+                            for non_seq in char_non_sequences[idx]:
+                                args.append(non_seq[:,sent_idx_arr,...])
                             # char decoder has no non-sequences
                             final_out, states_out, out_seqs = model.char_decoder.group_outputs(
                                 model.char_decoder.step_fun()(*args))
@@ -607,8 +621,11 @@ class NMT(Model):
         char_contexts = char_contexts.dimshuffle('x', 0, 1).repeat(out_chars.shape[0], axis=0)
         char_concat = T.concatenate([embedded_char_outputs, char_contexts],
                                     axis=-1)
+        char_attended = attended[:, charlevel_indices[0], :]
+        char_att_mask = inputs_mask[:, charlevel_indices[0]]
         char_h_seq, char_states, char_outputs = self.char_decoder(
-                char_concat, out_chars_mask)
+                char_concat, out_chars_mask,
+                non_sequences=[char_attended, char_att_mask])
         char_pred_seq = softmax_3d(self.char_emission(
             T.tanh(self.char_hidden(char_h_seq))))
 
@@ -1147,6 +1164,7 @@ def main():
                 scale = (test_outputs.shape[1] /
                             (test_outputs_mask.sum()*np.log(2)))
                 result += test_xent * scale
+                att_result += test_xent_attention*scale
             print('%d\t%.3f\t%.3f\t%.3f\t%d\t%d' % (
                     int(t0 - start_time),
                     result,
