@@ -1041,10 +1041,10 @@ def main():
     # By this point a model has been created or loaded, so we can define a
     # convenience function to perform translation.
     def translate(sents, encode=False):
-        if self.config['use_aux']:
+        if config['use_aux']:
             surface_encoder = config['trg_encoder'].sub_encoders['surface']
         else:
-            surface_encoder = self.config['trg_encoder']
+            surface_encoder = config['trg_encoder']
         for i in range(0, len(sents), config['batch_size']):
             batch_sents = sents[i:i+config['batch_size']]
             if encode:
