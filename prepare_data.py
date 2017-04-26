@@ -219,6 +219,8 @@ class ShardedData(object):
                 print('saving shard {} group {} with len ({}, {}) unks ({}, {}) in file {}'.format(
                     shard, group, padded_src[0].shape, padded_trg[0].shape,
                     n_src_unks, n_trg_unks, group_file_name))
+                outdir, _ = os.path.split(group_file_name)
+                os.makedirs(outdir, exist_ok=True)
                 with open(group_file_name, 'wb') as fobj:
                     pickle.dump([padded_src, padded_trg],
                                 fobj, protocol=pickle.HIGHEST_PROTOCOL)
