@@ -35,17 +35,17 @@ def beam_with_coverage(
         inputs_mask,
         beam_size=8,
         min_length=0,
-        alpha=0.2,
-        beta=0.2,
+        alpha=0.01,
+        beta=0.4,
+        gamma=1.0,
         len_smooth=5.0,
-        prune_margin=3.0,
         keep_unk_states=True,
-        keep_aux_states=False):
+        keep_aux_states=False,
+        speed_prune=1.0):
     """Beam search algorithm.
 
     See the documentation for :meth:`greedy()`.
     The additional arguments are FIXME
-    prune_margin is misleadingly named beamsize in Wu et al 2016
 
     Returns
     -------
@@ -70,7 +70,7 @@ def beam_with_coverage(
         active = [hyp for hyp in beams if hyp.last_sym != stop_symbol]
         completed = [hyp for hyp in beams if hyp.last_sym == stop_symbol]
         if len(active) == 0:
-            return by_sentence(beams)
+            return by_sentence(beams), i
 
         states = []
         prev_syms = np.zeros((1, len(active)), dtype=np.int64)
@@ -125,7 +125,12 @@ def beam_with_coverage(
                             np.minimum(coverage, np.ones_like(coverage))))
                     else:
                         cp = 0
-                    norm_score = (score / lp) + cp
+                    # overattending penalty
+                    if gamma > 0:
+                        oap = gamma * -max(0, np.max(coverage) - 1.)
+                    else:
+                        oap = 0
+                    norm_score = (score / lp) + cp + oap
                 new_states = [[s[j, :] for s in ms] for ms in all_states]
                 if keep_unk_states and symbol == unk_symbol:
                     new_unks = tuple(unk[j, :] for unk in all_unks)
@@ -153,13 +158,25 @@ def beam_with_coverage(
                                unks,
                                aux))
 
+        # maximal length discount
+        #max_lp = (((len_smooth + max_length - 2.) ** alpha)
+        #    / ((len_smooth + 1.) ** alpha))
+
         # prune hypotheses
+        def keep(hyp, best_normalized):
+            if hyp.last_sym == stop_symbol:
+                # only keep best completed hypothesis
+                return hyp.norm_score > best_normalized - 1e-6
+            else:
+                # active hypothesis: use margin to prune for speed
+                return hyp.score > best_normalized * speed_prune
         beams = []
         for (_, group) in by_sentence(completed + extended):
             group = list(group)
             best_normalized = max(hyp.norm_score for hyp in group)
-            group = [hyp for hyp in group
-                     if hyp.last_sym != stop_symbol
-                        or hyp.norm_score > best_normalized - prune_margin]
+            group = [hyp for hyp in group if keep(hyp, best_normalized)]
+            #print('hyps after pruning with {} - {}: {}'.format(best_normalized, prune_margin, len(group)))
             beams.extend(sorted(group, key=lambda hyp: -hyp.score)[:beam_size])
-    return by_sentence(beams)
+        #print('hyps after pruning {}'.format(len(beams)))
+        #print('score of 0: {}, score of 1: {}'.format(beams[0].score, beams[1].score))
+    return by_sentence(beams), max_length - 1

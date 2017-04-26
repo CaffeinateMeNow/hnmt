@@ -260,6 +260,9 @@ class NMT(Model):
             aux_in = T.matrix('aux_in')     # FIXME: calculations not minibatched!
             self.aux_fun = function([aux_in], self.aux_step(aux_in))
 
+        # stats
+        self.beam_ends = np.zeros((config['max_target_length'],))
+
     def xent(self, inputs, inputs_mask, chars, chars_mask,
              outputs, outputs_mask, out_chars, out_chars_mask,
              *aux):
@@ -338,7 +341,7 @@ class NMT(Model):
 
     def search(self, inputs, inputs_mask, chars, chars_mask,
                max_length, beam_size=8,
-               alpha=0.2, beta=0.2, len_smooth=5.0, others=[],
+               alpha=0.2, beta=0.2, gamma=0.0, len_smooth=5.0, others=[],
                expand_n=None, char_cost_weight=1.0, decode_aux=False):
         # list of models in the ensemble
         models = [self] + others
@@ -386,6 +389,8 @@ class NMT(Model):
                 # add stored recurrent inputs
                 args.extend(states[idx])
                 # relevant non-sequences need to be selected by sentence
+                # FIXME: this comprehension is a cpu hotspot
+                # probably due to sent_indices
                 for non_seq in non_sequences[idx]:
                     args.append(non_seq[:,sent_indices,...])
                 final_out, states_out, out_seqs = model.decoder.group_outputs(
@@ -404,7 +409,7 @@ class NMT(Model):
             dist = models_predict.mean(axis=0)
             return (models_states, dist, mean_attention, models_unk)
 
-        word_level = beam_with_coverage(
+        word_level, beam_end = beam_with_coverage(
                 step,
                 models_init,
                 batch_size,
@@ -416,8 +421,8 @@ class NMT(Model):
                 beam_size=beam_size,
                 alpha=alpha,
                 beta=beta,
+                gamma=gamma,
                 len_smooth=len_smooth,
-                prune_margin=3.0,
                 keep_unk_states=True,
                 keep_aux_states=decode_aux)
 
@@ -509,6 +514,7 @@ class NMT(Model):
             except StopIteration:
                 # beam was not at full capacity
                 pass
+        self.beam_ends[beam_end] += 1
         if decode_aux:
             return all_expanded, all_aux
         return all_expanded
@@ -757,6 +763,9 @@ def main():
     parser.add_argument('--beta', type=float, default=argparse.SUPPRESS,
             metavar='X',
             help='coverage penalty weight during beam translation')
+    parser.add_argument('--gamma', type=float, default=argparse.SUPPRESS,
+            metavar='X',
+            help='overattention penalty weight during beam translation')
     parser.add_argument('--len-smooth', type=float, default=argparse.SUPPRESS,
             metavar='X',
             help='smoothing constant for length penalty during beam translation')
@@ -876,8 +885,9 @@ def main():
             'test_source': None,
             'test_target': None,
             'beam_size': 8,
-            'alpha': 0.2,
-            'beta': 0.2,
+            'alpha': 0.01,
+            'beta': 0.4,
+            'gamma': 0.0,
             'len_smooth': 5.0,
             'hybrid_expand_n': None,
             'hybrid_char_cost_weight': 1.0,
@@ -897,9 +907,11 @@ def main():
         config = configs[0]
         # allow loading old models without these parameters
         if 'alpha' not in config:
-            config['alpha'] = 0.2
+            config['alpha'] = 0.01
         if 'beta' not in config:
-            config['beta'] = 0.2
+            config['beta'] = 0.4
+        if 'gamma' not in config:
+            config['gamma'] = 0.0
         if 'len_smooth' not in config:
             config['len_smooth'] = 5.0
         if 'encoder_residual_layers' not in config:
@@ -939,6 +951,8 @@ def main():
                     config['alpha'] = 0.2
                 if 'beta' not in config:
                     config['beta'] = 0.2
+                if 'gamma' not in config:
+                    config['gamma'] = 1.0
                 if 'len_smooth' not in config:
                     config['len_smooth'] = 5.0
                 model = NMT('nmt', config)
@@ -1056,6 +1070,7 @@ def main():
                     beam_size=config['beam_size'],
                     alpha=config['alpha'],
                     beta=config['beta'],
+                    gamma=config['gamma'],
                     len_smooth=config['len_smooth'],
                     others=models[1:],
                     expand_n=config['hybrid_expand_n'],
@@ -1065,6 +1080,14 @@ def main():
                 yield detokenize(
                     surface_encoder.decode_sentence(encoded, raw=True),
                     config['target_tokenizer'])
+            if i % (50*config['batch_size']) == 0:
+                print('\nmean beam search length: {}'.format(
+                    np.sum(model.beam_ends * np.arange(len(model.beam_ends))) /
+                    np.sum(model.beam_ends)))
+        print('\nFinal mean beam search length: {}'.format(
+            np.sum(model.beam_ends * np.arange(len(model.beam_ends))) /
+            np.sum(model.beam_ends)))
+        print('beam end counts: {}'.format(model.beam_ends))
 
     def monitor(translate_src, translate_trg):
         result = model.search(
