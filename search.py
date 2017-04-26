@@ -37,7 +37,7 @@ def beam_with_coverage(
         min_length=0,
         alpha=0.01,
         beta=0.4,
-        gamma=1.0,
+        gamma=0.0,
         len_smooth=5.0,
         keep_unk_states=True,
         keep_aux_states=False,
@@ -126,7 +126,7 @@ def beam_with_coverage(
                     else:
                         cp = 0
                     # overattending penalty
-                    if gamma > 0:
+                    if gamma > 0 and coverage is not None:
                         oap = gamma * -max(0, np.max(coverage) - 1.)
                     else:
                         oap = 0

@@ -474,7 +474,7 @@ class NMT(Model):
                         return (models_states, dist, None, None)
 
                     n_unks = len(hyp.unks)
-                    char_level = beam_with_coverage(
+                    char_level, _ = beam_with_coverage(
                             char_step,
                             unk_inits,
                             n_unks,
@@ -487,7 +487,6 @@ class NMT(Model):
                             alpha=0,
                             beta=0,
                             len_smooth=len_smooth,
-                            prune_margin=3.0,
                             keep_unk_states=False)
                     char_encodings = []
                     for (_, char_beam) in char_level:
