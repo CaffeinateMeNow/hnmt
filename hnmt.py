@@ -425,6 +425,7 @@ class NMT(Model):
                 len_smooth=len_smooth,
                 keep_unk_states=True,
                 keep_aux_states=decode_aux)
+        self.beam_ends[beam_end] += 1
 
         # character level decoding
         all_expanded = []
@@ -513,7 +514,6 @@ class NMT(Model):
             except StopIteration:
                 # beam was not at full capacity
                 pass
-        self.beam_ends[beam_end] += 1
         if decode_aux:
             return all_expanded, all_aux
         return all_expanded
