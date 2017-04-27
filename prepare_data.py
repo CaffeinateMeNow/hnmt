@@ -3,6 +3,7 @@ import itertools
 import numpy as np
 import random
 import pickle
+import os
 
 from finnpos import *
 from utils import *
