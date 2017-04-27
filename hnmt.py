@@ -525,9 +525,6 @@ class NMT(Model):
                 aux_pred = models[0].aux_fun(aux_in)
                 all_aux.append(tuple(
                     np.argmax(x, axis=-1) for x in aux_pred))
-            except StopIteration:
-                # beam was not at full capacity
-                pass
         if decode_aux:
             return all_expanded, all_aux
         return all_expanded
@@ -1141,7 +1138,7 @@ def main():
                 char_cost_weight=config['hybrid_char_cost_weight'],
                 max_extra_unks=config['hybrid_max_extra_unks'],
                 prune_mult=config['beam_prune_multiplier'],
-                char_prune_mult=config['char_beam_prune_multiplier']
+                char_prune_mult=config['char_beam_prune_multiplier'],
                 decode_aux=config['use_aux']
                 )
         decoded_src = config['src_encoder'].decode_padded(*translate_src)
