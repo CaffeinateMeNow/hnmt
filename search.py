@@ -3,14 +3,17 @@
 from collections import namedtuple
 
 import itertools
+import heapq
 import numpy as np
 import theano
 
+# heap of completed hypotheses sorted by norm_score
 Hypothesis = namedtuple(
     'Hypothesis',
-    ['sentence',    # index of sentence in minibatch
+    ['norm_score',  # final score adjusted by penalties
+     'sentence',    # index of sentence in minibatch
      'score',       # raw score
-     'norm_score',  # score adjusted by penalties
+     'prune_score', # score used for pruning
      'history',     # sequence up to last symbol
      'last_sym',    # last symbol
      'states',      # RNN state
@@ -21,8 +24,13 @@ Hypothesis = namedtuple(
 def by_sentence(beams):
     return itertools.groupby(
         sorted(beams,
-               key=lambda hyp: (hyp.sentence, -hyp.norm_score, -hyp.score)),
+               key=lambda hyp: hyp.sentence),
         lambda hyp: hyp.sentence)
+
+def sort_out(completed):
+    return [sorted(sentence,
+                   key=lambda hyp: (-hyp.norm_score, -hyp.score))
+            for sentence in completed]
 
 def beam_with_coverage(
         step,
@@ -39,9 +47,10 @@ def beam_with_coverage(
         beta=0.4,
         gamma=0.0,
         len_smooth=5.0,
+        prune_mult=1.0,
+        n_best=None,
         keep_unk_states=True,
-        keep_aux_states=False,
-        speed_prune=1.0):
+        keep_aux_states=False):
     """Beam search algorithm.
 
     See the documentation for :meth:`greedy()`.
@@ -60,17 +69,36 @@ def beam_with_coverage(
         Log-probability of the sequences in `outputs`.
     """
 
-    beams = [Hypothesis(i, 0., -1e30, (), start_symbol,
+    # coverage for masked-out timesteps is initialized to 1, to remove penalty
+    if inputs_mask is not None:
+        coverages = [1e-30 + 1. - inputs_mask[:, i]
+                     for i in range(batch_size)]
+    else:
+        coverages = [None] * batch_size
+    beams = [Hypothesis(-1e30, i, 0., 0., (), start_symbol,
                         [[s[i, :] for s in ms] for ms in states0],
-                        1e-30, (), ())
+                        coverages[i], (), ())
              for i in range(batch_size)]
 
+    if n_best is None:
+        n_best = batch_size
+    completed = [list() for i in range(batch_size)]
+    best_normalized = [-1e30] * batch_size 
     for i in range(max_length-2):
         # build step inputs
-        active = [hyp for hyp in beams if hyp.last_sym != stop_symbol]
-        completed = [hyp for hyp in beams if hyp.last_sym == stop_symbol]
+        active = []
+        for hyp in beams:
+            if hyp.last_sym != stop_symbol:
+                active.append(hyp)
+            else:
+                heapq.heappush(completed[hyp.sentence], hyp)
+                best_normalized[hyp.sentence] = max(
+                    hyp.norm_score, best_normalized[hyp.sentence])
+                if len(completed[hyp.sentence]) > n_best:
+                    # prunes smallest (i.e. worst) completed hyp
+                    heapq.heappop(completed[hyp.sentence])
         if len(active) == 0:
-            return by_sentence(beams), i
+            return sort_out(completed), i
 
         states = []
         prev_syms = np.zeros((1, len(active)), dtype=np.int64)
@@ -109,6 +137,11 @@ def beam_with_coverage(
                     coverage = hyp.coverage + attention[j, :]
                 else:
                     coverage = None
+                # overattending penalty
+                if gamma > 0 and coverage is not None:
+                    oap = gamma * -max(0, np.max(coverage) - 1.)
+                else:
+                    oap = 0
                 if symbol == stop_symbol:
                     # length penalty
                     # (history contains start symbol but not stop symbol)
@@ -118,19 +151,14 @@ def beam_with_coverage(
                     else:
                         lp = 1
                     # coverage penalty
-                    # apply mask: adding 1 to masked elements removes penalty
                     if beta > 0 and coverage is not None:
-                        coverage += (1. - inputs_mask[:, hyp.sentence])
                         cp = beta * np.sum(np.log(
                             np.minimum(coverage, np.ones_like(coverage))))
                     else:
                         cp = 0
-                    # overattending penalty
-                    if gamma > 0 and coverage is not None:
-                        oap = gamma * -max(0, np.max(coverage) - 1.)
-                    else:
-                        oap = 0
                     norm_score = (score / lp) + cp + oap
+                # both score and overattending penalty are monotonically worsening
+                prune_score = score + oap
                 new_states = [[s[j, :] for s in ms] for ms in all_states]
                 if keep_unk_states and symbol == unk_symbol:
                     new_unks = tuple(unk[j, :] for unk in all_unks)
@@ -148,9 +176,10 @@ def beam_with_coverage(
                 else:
                     aux = hyp.aux
                 extended.append(
-                    Hypothesis(hyp.sentence,
+                    Hypothesis(norm_score,
+                               hyp.sentence,
                                score,
-                               norm_score,
+                               prune_score,
                                history,
                                symbol,
                                new_states,
@@ -158,25 +187,18 @@ def beam_with_coverage(
                                unks,
                                aux))
 
-        # maximal length discount
-        #max_lp = (((len_smooth + max_length - 2.) ** alpha)
-        #    / ((len_smooth + 1.) ** alpha))
-
-        # prune hypotheses
+        # prune active hypotheses
+        # this heuristic can prune out winning hypotheses,
+        # as length penalty and coverage penalty can keep on improving
         def keep(hyp, best_normalized):
-            if hyp.last_sym == stop_symbol:
-                # only keep best completed hypothesis
-                return hyp.norm_score > best_normalized - 1e-6
-            else:
-                # active hypothesis: use margin to prune for speed
-                return hyp.score > best_normalized * speed_prune
+            return hyp.prune_score > (best_normalized * prune_mult)
         beams = []
-        for (_, group) in by_sentence(completed + extended):
+        for (sent, group) in by_sentence(extended):
             group = list(group)
-            best_normalized = max(hyp.norm_score for hyp in group)
-            group = [hyp for hyp in group if keep(hyp, best_normalized)]
-            #print('hyps after pruning with {} - {}: {}'.format(best_normalized, prune_margin, len(group)))
+            group = [hyp for hyp in group if keep(hyp, best_normalized[sent])]
             beams.extend(sorted(group, key=lambda hyp: -hyp.score)[:beam_size])
-        #print('hyps after pruning {}'.format(len(beams)))
-        #print('score of 0: {}, score of 1: {}'.format(beams[0].score, beams[1].score))
-    return by_sentence(beams), max_length - 1
+    # force-terminate actives, if needed
+    for sent in range(batch_size):
+        if len(completed[sent]) == 0:
+            completed[sent] = [hyp for hyp in beams if hyp.sentence == sent]
+    return sort_out(completed), max_length - 1

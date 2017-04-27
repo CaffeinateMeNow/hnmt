@@ -341,8 +341,9 @@ class NMT(Model):
 
     def search(self, inputs, inputs_mask, chars, chars_mask,
                max_length, beam_size=8,
-               alpha=0.2, beta=0.2, gamma=0.0, len_smooth=5.0, others=[],
-               expand_n=None, char_cost_weight=1.0, decode_aux=False):
+               alpha=0.2, beta=0.2, gamma=1.0, len_smooth=5.0, others=[],
+               expand_n=None, char_cost_weight=1.0, max_extra_unks=2,
+               prune_mult=1.0, char_prune_mult=1.2, decode_aux=False):
         # list of models in the ensemble
         models = [self] + others
         n_models = len(models)
@@ -423,6 +424,7 @@ class NMT(Model):
                 beta=beta,
                 gamma=gamma,
                 len_smooth=len_smooth,
+                prune_mult=prune_mult,
                 keep_unk_states=True,
                 keep_aux_states=decode_aux)
         self.beam_ends[beam_end] += 1
@@ -430,87 +432,99 @@ class NMT(Model):
         # character level decoding
         all_expanded = []
         all_aux = []
-        for (sent_idx, beam) in word_level:
+        for (sent_idx, beam) in enumerate(word_level):
             expanded_hyps = []
-            try:
-                for i in range(expand_n):
-                    hyp = next(beam)
-                    score = hyp.norm_score
-                    word_level_seq = hyp.history + (hyp.last_sym,)
-                    # FIXME debug
-                    print('output of word level decoder:')
-                    if self.config['use_aux']:
-                        word_encoder = self.config['trg_encoder'].sub_encoders['surface']
-                    else:
-                        word_encoder = self.config['trg_encoder']
-                    print(' '.join(word_encoder.decode_sentence(
-                        Encoded(word_level_seq, None), raw=True)))
-                    # map from word level decoder states to char level states
-                    unk_hs, unk_inits = self.word_to_char_states(hyp.unks, models)
+            for (i, hyp) in zip(range(expand_n), beam):
+                score = hyp.norm_score
+                word_level_seq = hyp.history + (hyp.last_sym,)
+                # FIXME debug
+                print('output of word level decoder:')
+                if self.config['use_aux']:
+                    word_encoder = self.config['trg_encoder'].sub_encoders['surface']
+                else:
+                    word_encoder = self.config['trg_encoder']
+                print(' '.join(word_encoder.decode_sentence(
+                    Encoded(word_level_seq, None), raw=True)))
+                # map from word level decoder states to char level states
+                unk_hs, unk_inits = self.word_to_char_states(hyp.unks, models)
 
-                    def char_step(i, states, outputs, outputs_mask, word_indices):
-                        models_out = []
-                        models_states = []
-                        for (idx, model) in enumerate(models):
-                            emb = models_char_embeddings[idx][outputs[-1]]
-                            #hs = unk_hs[idx][None, ...].repeat(emb.shape[0], axis=0)
-                            hs = unk_hs[idx][word_indices]
-                            args = [np.concatenate((emb, hs), axis=-1),
-                                    outputs_mask]
-                            # add stored recurrent inputs
-                            args.extend(states[idx])
-                            sent_idx_arr = np.array([sent_idx] * len(word_indices))
-                            for non_seq in char_non_sequences[idx]:
-                                args.append(non_seq[:,sent_idx_arr,...])
-                            # char decoder has no non-sequences
-                            final_out, states_out, out_seqs = model.char_decoder.group_outputs(
-                                model.char_decoder.step_fun()(*args))
-                            models_out.append(final_out)
-                            models_states.append(states_out)
+                def char_step(i, states, outputs, outputs_mask, word_indices):
+                    models_out = []
+                    models_states = []
+                    for (idx, model) in enumerate(models):
+                        emb = models_char_embeddings[idx][outputs[-1]]
+                        #hs = unk_hs[idx][None, ...].repeat(emb.shape[0], axis=0)
+                        hs = unk_hs[idx][word_indices]
+                        args = [np.concatenate((emb, hs), axis=-1),
+                                outputs_mask]
+                        # add stored recurrent inputs
+                        args.extend(states[idx])
+                        sent_idx_arr = np.array([sent_idx] * len(word_indices))
+                        for non_seq in char_non_sequences[idx]:
+                            args.append(non_seq[:,sent_idx_arr,...])
+                        # char decoder has no non-sequences
+                        final_out, states_out, out_seqs = model.char_decoder.group_outputs(
+                            model.char_decoder.step_fun()(*args))
+                        models_out.append(final_out)
+                        models_states.append(states_out)
 
-                        models_predict = np.array(
-                                [models[idx].char_predict_fun(models_out[idx])
-                                for idx in range(n_models)])
-                        dist = models_predict.mean(axis=0)
-                        return (models_states, dist, None, None)
+                    models_predict = np.array(
+                            [models[idx].char_predict_fun(models_out[idx])
+                            for idx in range(n_models)])
+                    dist = models_predict.mean(axis=0)
+                    return (models_states, dist, None, None)
 
-                    n_unks = len(hyp.unks)
-                    char_level, _ = beam_with_coverage(
-                            char_step,
-                            unk_inits,
-                            n_unks,
-                            self.config['trg_encoder'].sub_encoder['<S>'],
-                            self.config['trg_encoder'].sub_encoder['</S>'],
-                            None,
-                            self.config['max_target_word_length'],
-                            None,
-                            beam_size=beam_size,
-                            alpha=0,
-                            beta=0,
-                            len_smooth=len_smooth,
-                            keep_unk_states=False)
-                    char_encodings = []
-                    for (_, char_beam) in char_level:
-                        # only the best character-level hypothesis
-                        char_hyp = next(char_beam)
-                        # add weighted cost of each best char-level hyp
-                        score += char_cost_weight * char_hyp.norm_score
-                        char_encodings.append(
-                            Encoded(char_hyp.history + (char_hyp.last_sym,),
-                                    None))
-                    encoded = Encoded(
-                        self.number_unks(word_level_seq, len(char_encodings)),
-                        char_encodings)
-                    expanded_hyps.append((score, encoded, hyp.aux))
-                expanded_hyps.sort(key=lambda x: -x[0])
-                # sort hypotheses by combined score
-                all_expanded.append([x[1] for x in expanded_hyps])
-                if decode_aux:
-                    # only doing aux for the best hypothesis
-                    aux_in = np.array(expanded_hyps[0][2])
-                    aux_pred = models[0].aux_fun(aux_in)
-                    all_aux.append(tuple(
-                        np.argmax(x, axis=-1) for x in aux_pred))
+                n_unks = len(hyp.unks)
+                if i == 0:
+                    n_unks_in_top = n_unks
+                elif n_unks > n_unks_in_top + max_extra_unks:
+                    # too many unks more than in top-of-beam
+                    # won't waste time expanding it
+                    continue
+                char_level, _ = beam_with_coverage(
+                    char_step,
+                    unk_inits,
+                    n_unks,
+                    self.config['trg_encoder'].sub_encoder['<S>'],
+                    self.config['trg_encoder'].sub_encoder['</S>'],
+                    None,
+                    self.config['max_target_word_length'],
+                    None,
+                    beam_size=beam_size,
+                    alpha=0,
+                    beta=0,
+                    gamma=0,
+                    len_smooth=len_smooth,
+                    n_best=1,
+                    prune_mult=char_prune_mult,
+                    keep_unk_states=False)
+                char_encodings = []
+                for char_beam in char_level:
+                    if len(char_beam) == 0:
+                        # character-level hyp was empty
+                        score += -1e30
+                        char_encodings.append(Encoded((), None))
+                        continue
+                    # only the best character-level hypothesis
+                    char_hyp = char_beam[0]
+                    # add weighted cost of each best char-level hyp
+                    score += char_cost_weight * char_hyp.norm_score
+                    char_encodings.append(
+                        Encoded(char_hyp.history + (char_hyp.last_sym,),
+                                None))
+                encoded = Encoded(
+                    self.number_unks(word_level_seq, len(char_encodings)),
+                    char_encodings)
+                expanded_hyps.append((score, encoded, hyp.aux))
+            expanded_hyps.sort(key=lambda x: -x[0])
+            # sort hypotheses by combined score
+            all_expanded.append([x[1] for x in expanded_hyps])
+            if decode_aux:
+                # only doing aux for the best hypothesis
+                aux_in = np.array(expanded_hyps[0][2])
+                aux_pred = models[0].aux_fun(aux_in)
+                all_aux.append(tuple(
+                    np.argmax(x, axis=-1) for x in aux_pred))
             except StopIteration:
                 # beam was not at full capacity
                 pass
@@ -756,6 +770,18 @@ def main():
     parser.add_argument('--hybrid-char-cost-weight',
             type=float, default=argparse.SUPPRESS, metavar='X',
             help='weight for character-level logprobability')
+    parser.add_argument('--hybrid-max-extra-unks', type=int, default=argparse.SUPPRESS,
+            metavar='N',
+            help='do not expand word level hypotheses to character-level '
+            'if it has at least this many unks more than top of beam')
+    parser.add_argument('--beam-prune-multiplier',
+            type=float, default=argparse.SUPPRESS, metavar='X',
+            help='multiplier for pruning threshold. '
+            'Values less than 1.0 prunes more aggressively.')
+    parser.add_argument('--char-beam-prune-multiplier',
+            type=float, default=argparse.SUPPRESS, metavar='X',
+            help='multiplier for pruning threshold on character level. '
+            'Values less than 1.0 prunes more aggressively.')
     parser.add_argument('--alpha', type=float, default=argparse.SUPPRESS,
             metavar='X',
             help='length penalty weight during beam translation')
@@ -890,6 +916,9 @@ def main():
             'len_smooth': 5.0,
             'hybrid_expand_n': None,
             'hybrid_char_cost_weight': 1.0,
+            'hybrid_max_extra_unks': 2,
+            'beam_prune_multiplier': 1.0,
+            'char_beam_prune_multiplier': 1.2,
             'aux_cost_weight': 0.1}
 
     if args.translate:
@@ -921,6 +950,12 @@ def main():
             config['hybrid_expand_n'] = None
         if 'hybrid_char_cost_weight' not in config:
             config['hybrid_char_cost_weight'] = 1.0
+        if 'hybrid_max_extra_unks' not in config:
+            config['hybrid_max_extra_unks'] = 2
+        if 'beam_prune_multiplier' not in config:
+            config['beam_prune_multiplier'] = 1.0
+        if 'char_beam_prune_multiplier' not in config:
+            config['char_beam_prune_multiplier'] = 1.2
 
         for c in configs[1:]:
             assert c['trg_encoder'].vocab == config['trg_encoder'].vocab
@@ -951,7 +986,7 @@ def main():
                 if 'beta' not in config:
                     config['beta'] = 0.2
                 if 'gamma' not in config:
-                    config['gamma'] = 1.0
+                    config['gamma'] = 0.0
                 if 'len_smooth' not in config:
                     config['len_smooth'] = 5.0
                 model = NMT('nmt', config)
@@ -1073,7 +1108,12 @@ def main():
                     len_smooth=config['len_smooth'],
                     others=models[1:],
                     expand_n=config['hybrid_expand_n'],
-                    char_cost_weight=config['hybrid_char_cost_weight'])
+                    char_cost_weight=config['hybrid_char_cost_weight'],
+                    max_extra_unks=config['hybrid_max_extra_unks'],
+                    prune_mult=config['beam_prune_multiplier'],
+                    char_prune_mult=config['char_beam_prune_multiplier'],
+                    decode_aux=False
+                    )
             for sentence in sentences:
                 encoded = Surface(sentence[0])
                 yield detokenize(
@@ -1094,11 +1134,16 @@ def main():
                 beam_size=config['beam_size'],
                 alpha=config['alpha'],
                 beta=config['beta'],
+                gamma=config['gamma'],
                 len_smooth=config['len_smooth'],
                 others=models[1:],
                 expand_n=config['hybrid_expand_n'],
                 char_cost_weight=config['hybrid_char_cost_weight'],
-                decode_aux=config['use_aux'])
+                max_extra_unks=config['hybrid_max_extra_unks'],
+                prune_mult=config['beam_prune_multiplier'],
+                char_prune_mult=config['char_beam_prune_multiplier']
+                decode_aux=config['use_aux']
+                )
         decoded_src = config['src_encoder'].decode_padded(*translate_src)
         decoded_trg = config['trg_encoder'].decode_padded(*translate_trg)
         if config['use_aux']:
