@@ -220,6 +220,10 @@ class FinnposEncoder(object):
     def __getitem__(self, token):
         return self.sub_encoders['surface'][token]
 
+    @property
+    def vocab(self):
+        return self.sub_encoders['surface'].vocab
+
     def __len__(self):
         # length of main vocabulary
         return len(self.sub_encoders['surface'])

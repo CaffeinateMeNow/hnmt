@@ -986,6 +986,12 @@ def main():
                     config['gamma'] = 0.0
                 if 'len_smooth' not in config:
                     config['len_smooth'] = 5.0
+                if 'hybrid_expand_n' not in config:
+                    config['hybrid_expand_n'] = None
+                if 'hybrid_char_cost_weight' not in config:
+                    config['hybrid_char_cost_weight'] = 1.0
+                if 'hybrid_max_extra_unks' not in config:
+                    config['hybrid_max_extra_unks'] = 2
                 model = NMT('nmt', config)
                 model.load(f)
                 models = [model]
