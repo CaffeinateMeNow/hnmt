@@ -992,6 +992,10 @@ def main():
                     config['hybrid_char_cost_weight'] = 1.0
                 if 'hybrid_max_extra_unks' not in config:
                     config['hybrid_max_extra_unks'] = 2
+                if 'beam_prune_multiplier' not in config:
+                    config['beam_prune_multiplier'] = 1.0
+                if 'char_beam_prune_multiplier' not in config:
+                    config['char_beam_prune_multiplier'] = 1.2
                 model = NMT('nmt', config)
                 model.load(f)
                 models = [model]
