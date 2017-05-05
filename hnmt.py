@@ -516,9 +516,9 @@ class NMT(Model):
                     self.number_unks(word_level_seq, len(char_encodings)),
                     char_encodings)
                 expanded_hyps.append((score, encoded, hyp.aux))
-            expanded_hyps.sort(key=lambda x: -x[0])
             # sort hypotheses by combined score
-            all_expanded.append([x[1] for x in expanded_hyps])
+            expanded_hyps.sort(key=lambda x: -x[0])
+            all_expanded.append(expanded_hyps)
             if decode_aux:
                 # only doing aux for the best hypothesis
                 aux_in = np.array(expanded_hyps[0][2])
@@ -887,6 +887,8 @@ def main():
     parser.add_argument('--aux-dims', type=int, default=512,
             metavar='N',
             help='size of aux state')
+    parser.add_argument('--output-score', default=False, action='store_true',
+            help='output score before translation, separated by space')
 
     args = parser.parse_args()
     args_vars = vars(args)
@@ -953,6 +955,8 @@ def main():
             config['beam_prune_multiplier'] = 1.0
         if 'char_beam_prune_multiplier' not in config:
             config['char_beam_prune_multiplier'] = 1.2
+
+        config['output_score'] = args.output_score
 
         for c in configs[1:]:
             assert c['trg_encoder'].vocab == config['trg_encoder'].vocab
@@ -1121,11 +1125,17 @@ def main():
                     char_prune_mult=config['char_beam_prune_multiplier'],
                     decode_aux=False
                     )
-            for sentence in sentences:
+            for tpl in sentences:
+                score = tpl[0]
+                sentence = tpl[1]
                 encoded = Surface(sentence[0])
-                yield detokenize(
+                detok = detokenize(
                     surface_encoder.decode_sentence(encoded, raw=True),
                     config['target_tokenizer'])
+                if config['output_score']:
+                    yield ' '.join(score, detok)
+                else:
+                    yield detok
             if i % (50*config['batch_size']) == 0:
                 print('\nmean beam search length: {}'.format(
                     np.sum(model.beam_ends * np.arange(len(model.beam_ends))) /
