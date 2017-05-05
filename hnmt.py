@@ -343,7 +343,7 @@ class NMT(Model):
                max_length, beam_size=8,
                alpha=0.2, beta=0.2, gamma=1.0, len_smooth=5.0, others=[],
                expand_n=None, char_cost_weight=1.0, max_extra_unks=2,
-               prune_mult=1.0, char_prune_mult=1.2, decode_aux=False):
+               prune_mult=1.0, char_prune_mult=1.2, decode_aux=False, return_score=False):
         # list of models in the ensemble
         models = [self] + others
         n_models = len(models)
@@ -518,7 +518,10 @@ class NMT(Model):
                 expanded_hyps.append((score, encoded, hyp.aux))
             # sort hypotheses by combined score
             expanded_hyps.sort(key=lambda x: -x[0])
-            all_expanded.append(expanded_hyps)
+            if return_score:
+                all_expanded.append(list(expanded_hyps))
+            else:
+                all_expanded.append([x[1] for x in expanded_hyps])
             if decode_aux:
                 # only doing aux for the best hypothesis
                 aux_in = np.array(expanded_hyps[0][2])
@@ -1123,17 +1126,18 @@ def main():
                     max_extra_unks=config['hybrid_max_extra_unks'],
                     prune_mult=config['beam_prune_multiplier'],
                     char_prune_mult=config['char_beam_prune_multiplier'],
-                    decode_aux=False
+                    decode_aux=False,
+                    return_score=config['output_score']
                     )
-            for tpl in sentences:
+            for nbest in sentences:
+                tpl = nbest[0]  # only 1-best
                 score = tpl[0]
-                sentence = tpl[1]
-                encoded = Surface(sentence[0])
+                encoded = Surface(tpl[1])
                 detok = detokenize(
                     surface_encoder.decode_sentence(encoded, raw=True),
                     config['target_tokenizer'])
                 if config['output_score']:
-                    yield ' '.join(score, detok)
+                    yield '{} {}'.format(score, detok)
                 else:
                     yield detok
             if i % (50*config['batch_size']) == 0:
@@ -1159,7 +1163,8 @@ def main():
                 max_extra_unks=config['hybrid_max_extra_unks'],
                 prune_mult=config['beam_prune_multiplier'],
                 char_prune_mult=config['char_beam_prune_multiplier'],
-                decode_aux=config['use_aux']
+                decode_aux=config['use_aux'],
+                return_score=False
                 )
         decoded_src = config['src_encoder'].decode_padded(*translate_src)
         decoded_trg = config['trg_encoder'].decode_padded(*translate_trg)
