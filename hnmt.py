@@ -890,8 +890,8 @@ def main():
     parser.add_argument('--aux-dims', type=int, default=512,
             metavar='N',
             help='size of aux state')
-    parser.add_argument('--output-score', default=False, action='store_true',
-            help='output score before translation, separated by space')
+    parser.add_argument('--output-score', type=str, default=argparse.SUPPRESS,
+            help='filename to output translation scores')
 
     args = parser.parse_args()
     args_vars = vars(args)
@@ -959,7 +959,10 @@ def main():
         if 'char_beam_prune_multiplier' not in config:
             config['char_beam_prune_multiplier'] = 1.2
 
-        config['output_score'] = args.output_score
+        if args.output_score:
+            config['output_score'] = args.output_score
+        else:
+            config['output_score'] = False
 
         for c in configs[1:]:
             assert c['trg_encoder'].vocab == config['trg_encoder'].vocab
@@ -1102,7 +1105,7 @@ def main():
 
     # By this point a model has been created or loaded, so we can define a
     # convenience function to perform translation.
-    def translate(sents, encode=False):
+    def translate(sents, encode=False, score_fobj=None):
         if config['use_aux']:
             surface_encoder = config['trg_encoder'].sub_encoders['surface']
         else:
@@ -1127,7 +1130,7 @@ def main():
                     prune_mult=config['beam_prune_multiplier'],
                     char_prune_mult=config['char_beam_prune_multiplier'],
                     decode_aux=False,
-                    return_score=config['output_score']
+                    return_score=True,
                     )
             for nbest in sentences:
                 tpl = nbest[0]  # only 1-best
@@ -1136,10 +1139,9 @@ def main():
                 detok = detokenize(
                     surface_encoder.decode_sentence(encoded, raw=True),
                     config['target_tokenizer'])
-                if config['output_score']:
-                    yield '{} {}'.format(score, detok)
-                else:
-                    yield detok
+                if score_fobj is not None:
+                    score_fobj.write('{}\n'.format(score))
+                yield detok
             if i % (50*config['batch_size']) == 0:
                 print('\nmean beam search length: {}'.format(
                     np.sum(model.beam_ends * np.arange(len(model.beam_ends))) /
@@ -1226,9 +1228,15 @@ def main():
         sents = read_sents(
                 args.translate,
                 config['source_tokenizer'])
-        for i,sent in enumerate(translate(sents, encode=True)):
+        if config['output_score']:
+            score_fobj = open(config['output_score'], 'w', encoding='utf-8')
+        else:
+            score_fobj = None
+        for i,sent in enumerate(translate(sents, encode=True, score_fobj=score_fobj)):
             print('.', file=sys.stderr, flush=True, end='')
             print(sent, file=outf, flush=True)
+        if config['output_score']:
+            score_fobj.close()
         print(' done!', file=sys.stderr, flush=True)
         if args.output:
             outf.close()
