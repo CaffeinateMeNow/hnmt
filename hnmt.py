@@ -296,22 +296,30 @@ class NMT(Model):
         if self.config['use_aux']:
             # aux costs
             logf, lemma, pos, num, case, pers, mood, tense = aux
-            aux_xent = batch_sequence_crossentropy(
-                pred_logf, logf[1:], outputs_mask[1:])
-            aux_xent += batch_sequence_crossentropy(
-                pred_lemma, lemma[1:], outputs_mask[1:])
-            aux_xent += batch_sequence_crossentropy(
-                pred_pos, pos[1:], outputs_mask[1:])
-            aux_xent += batch_sequence_crossentropy(
-                pred_num, num[1:], outputs_mask[1:])
-            aux_xent += batch_sequence_crossentropy(
-                pred_case, case[1:], outputs_mask[1:])
-            aux_xent += batch_sequence_crossentropy(
-                pred_pers, pers[1:], outputs_mask[1:])
-            aux_xent += batch_sequence_crossentropy(
-                pred_mood, mood[1:], outputs_mask[1:])
-            aux_xent += batch_sequence_crossentropy(
-                pred_tense, tense[1:], outputs_mask[1:])
+            aux_xent = self.config['aux_logf_weight'] * \
+                batch_sequence_crossentropy(
+                    pred_logf, logf[1:], outputs_mask[1:])
+            aux_xent += self.config['aux_lemma_weight'] * \
+                batch_sequence_crossentropy(
+                    pred_lemma, lemma[1:], outputs_mask[1:])
+            aux_xent += self.config['aux_pos_weight'] * \
+                batch_sequence_crossentropy(
+                    pred_pos, pos[1:], outputs_mask[1:])
+            aux_xent += self.config['aux_tags_weight'] * \
+                batch_sequence_crossentropy(
+                    pred_num, num[1:], outputs_mask[1:])
+            aux_xent += self.config['aux_tags_weight'] * \
+                batch_sequence_crossentropy(
+                    pred_case, case[1:], outputs_mask[1:])
+            aux_xent += self.config['aux_tags_weight'] * \
+                batch_sequence_crossentropy(
+                    pred_pers, pers[1:], outputs_mask[1:])
+            aux_xent += self.config['aux_tags_weight'] * \
+                batch_sequence_crossentropy(
+                    pred_mood, mood[1:], outputs_mask[1:])
+            aux_xent += self.config['aux_tags_weight'] * \
+                batch_sequence_crossentropy(
+                    pred_tense, tense[1:], outputs_mask[1:])
             aux_xent *= self.config['aux_cost_weight']
             aux_xent = theano.printing.Print('aux_xent')(aux_xent)
             total_xent += aux_xent
@@ -662,11 +670,15 @@ class NMT(Model):
         char_contexts = char_contexts.dimshuffle('x', 0, 1).repeat(out_chars.shape[0], axis=0)
         char_concat = T.concatenate([embedded_char_outputs, char_contexts],
                                     axis=-1)
-        char_attended = attended[:, charlevel_indices[0], :]
-        char_att_mask = inputs_mask[:, charlevel_indices[0]]
+        if self.config['no_hybrid_character_attention']:
+            char_non_sequences = []
+        else:
+            char_attended = attended[:, charlevel_indices[0], :]
+            char_att_mask = inputs_mask[:, charlevel_indices[0]]
+            char_non_sequences = [char_attended, char_att_mask]
         char_h_seq, char_states, char_outputs = self.char_decoder(
                 char_concat, out_chars_mask,
-                non_sequences=[char_attended, char_att_mask])
+                non_sequences=char_non_sequences)
         char_pred_seq = softmax_3d(self.char_emission(
             T.tanh(self.char_hidden(char_h_seq))))
 
@@ -909,6 +921,9 @@ def main():
     parser.add_argument('--aux-lemma-weight', type=float, default=argparse.SUPPRESS,
             metavar='X',
             help='weight of lemma component of aux loss')
+    parser.add_argument('--aux-pos-weight', type=float, default=argparse.SUPPRESS,
+            metavar='X',
+            help='weight of pos component of aux loss')
     parser.add_argument('--aux-tag-weight', type=float, default=argparse.SUPPRESS,
             metavar='X',
             help='weight of tag components of aux loss')
@@ -946,7 +961,12 @@ def main():
             'hybrid_max_extra_unks': 2,
             'beam_prune_multiplier': 1.0,
             'char_beam_prune_multiplier': 1.2,
-            'aux_cost_weight': 0.1}
+            'aux_cost_weight': 0.5,
+            'aux_logf_weight': 1.0,
+            'aux_lemma_weight': 1.0,
+            'aux_pos_weight': 1.0,
+            'aux_tags_weight': 1.0,
+            }
 
     if args.translate:
         models = []
@@ -1155,7 +1175,7 @@ def main():
                     prune_mult=config['beam_prune_multiplier'],
                     char_prune_mult=config['char_beam_prune_multiplier'],
                     decode_aux=False,
-                    return_score=True,
+                    return_score=True
                     )
             for nbest in sentences:
                 tpl = nbest[0]  # only 1-best
