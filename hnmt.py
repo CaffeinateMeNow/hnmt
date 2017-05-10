@@ -196,17 +196,28 @@ class NMT(Model):
             decoder_units,
             backwards=False, offset=-1))
 
-        print('using attentional character-level decoder',
-              file=sys.stderr, flush=True)  # FIXME: add flag
-        char_decoder_units = [LSTMUnit(
-            'char_decoder',
-            config['src_char_embedding_dims'] + config['decoder_state_dims'],
-            config['char_decoder_state_dims'],
-            layernorm=config['decoder_layernorm'],
-            dropout=config['recurrent_dropout'],
-            attention_dims=config['attention_dims'],
-            attended_dims=2*config['encoder_state_dims'],
-            trainable_initial=True)]
+        if config['no_hybrid_character_attention']:
+            print('attentional character-level decoder turned OFF',
+                file=sys.stderr, flush=True)
+            char_decoder_units = [LSTMUnit(
+                'char_decoder',
+                config['src_char_embedding_dims'] + config['decoder_state_dims'],
+                config['char_decoder_state_dims'],
+                layernorm=config['decoder_layernorm'],
+                dropout=config['recurrent_dropout'],
+                trainable_initial=True)]
+        else:
+            print('using attentional character-level decoder',
+                file=sys.stderr, flush=True)
+            char_decoder_units = [LSTMUnit(
+                'char_decoder',
+                config['src_char_embedding_dims'] + config['decoder_state_dims'],
+                config['char_decoder_state_dims'],
+                layernorm=config['decoder_layernorm'],
+                dropout=config['recurrent_dropout'],
+                attention_dims=config['attention_dims'],
+                attended_dims=2*config['encoder_state_dims'],
+                trainable_initial=True)]
         for i in range(config['char_decoder_residual_layers']):
             char_decoder_units.append(
                 ResidualUnit(LSTMUnit(
@@ -366,9 +377,12 @@ class NMT(Model):
             non_sequences.append(m.decoder.make_nonsequences(
                 [attended, inputs_mask],
                 include_params=False, do_eval=True))
+            if config['no_hybrid_character_attention']:
+                char_attended = []
+            else:
+                char_attended = [attended, inputs_mask]
             char_non_sequences.append(m.char_decoder.make_nonsequences(
-                [attended, inputs_mask],
-                include_params=False, do_eval=True))
+                char_attended, include_params=False, do_eval=True))
 
         # output embeddings for each model
         models_embeddings = [
@@ -774,6 +788,8 @@ def main():
             metavar='N',
             help='do not expand word level hypotheses to character-level '
             'if it has at least this many unks more than top of beam')
+    parser.add_argument('--no-hybrid-character-attention', default=False, action='store_true',
+            help='turn off character-level attention in hybrid decoder')
     parser.add_argument('--beam-prune-multiplier',
             type=float, default=argparse.SUPPRESS, metavar='X',
             help='multiplier for pruning threshold. '
@@ -887,6 +903,15 @@ def main():
     parser.add_argument('--aux-cost-weight', type=float, default=argparse.SUPPRESS,
             metavar='X',
             help='weight of aux loss')
+    parser.add_argument('--aux-logf-weight', type=float, default=argparse.SUPPRESS,
+            metavar='X',
+            help='weight of logf component of aux loss')
+    parser.add_argument('--aux-lemma-weight', type=float, default=argparse.SUPPRESS,
+            metavar='X',
+            help='weight of lemma component of aux loss')
+    parser.add_argument('--aux-tag-weight', type=float, default=argparse.SUPPRESS,
+            metavar='X',
+            help='weight of tag components of aux loss')
     parser.add_argument('--aux-dims', type=int, default=512,
             metavar='N',
             help='size of aux state')
