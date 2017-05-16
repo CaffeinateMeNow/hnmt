@@ -1140,6 +1140,7 @@ def main():
                 'decoder_layernorm':
                     'ba2' if args.layer_normalization else False,
                 'use_aux': args.use_aux,
+                'no_hybrid_character_attention': args.no_hybrid_character_attention,
                 })
 
             model = NMT('nmt', config)
