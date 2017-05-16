@@ -385,7 +385,7 @@ class NMT(Model):
             non_sequences.append(m.decoder.make_nonsequences(
                 [attended, inputs_mask],
                 include_params=False, do_eval=True))
-            if config['no_hybrid_character_attention']:
+            if self.config['no_hybrid_character_attention']:
                 char_attended = []
             else:
                 char_attended = [attended, inputs_mask]
