@@ -1003,6 +1003,8 @@ def main():
             config['beam_prune_multiplier'] = 1.0
         if 'char_beam_prune_multiplier' not in config:
             config['char_beam_prune_multiplier'] = 1.2
+        if 'no_hybrid_character_attention' not in config:
+            config['no_hybrid_character_attention'] = False
 
         if args.output_score:
             config['output_score'] = args.output_score
