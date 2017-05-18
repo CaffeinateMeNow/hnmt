@@ -968,31 +968,18 @@ def main():
             'aux_tags_weight': 1.0,
             }
 
-    if args.translate:
-        models = []
-        configs = []
-        for filename in args.load_model.split(','):
-            print('HNMT: loading translation model from %s...' % filename,
-                  file=sys.stderr, flush=True)
-            with open(filename, 'rb') as f:
-                configs.append(pickle.load(f))
-                models.append(NMT('nmt', configs[-1]))
-                models[-1].load(f)
-        model = models[0]
-        config = configs[0]
-        # allow loading old models without these parameters
+    def ensure_new_parameters(config):
+        """allow loading old models without these parameters"""
+        if 'alignment_decay' not in config:
+            config['alignment_decay'] = 0.9995
         if 'alpha' not in config:
             config['alpha'] = 0.01
         if 'beta' not in config:
-            config['beta'] = 0.4
+            config['beta'] = 0.3
         if 'gamma' not in config:
             config['gamma'] = 0.0
         if 'len_smooth' not in config:
             config['len_smooth'] = 5.0
-        if 'encoder_residual_layers' not in config:
-            config['encoder_residual_layers'] = 0
-        if 'decoder_residual_layers' not in config:
-            config['decoder_residual_layers'] = 0
         if 'hybrid_expand_n' not in config:
             config['hybrid_expand_n'] = None
         if 'hybrid_char_cost_weight' not in config:
@@ -1002,9 +989,26 @@ def main():
         if 'beam_prune_multiplier' not in config:
             config['beam_prune_multiplier'] = 1.0
         if 'char_beam_prune_multiplier' not in config:
-            config['char_beam_prune_multiplier'] = 1.2
+            config['char_beam_prune_multiplier'] = 1.4
+        if 'encoder_residual_layers' not in config:
+            config['encoder_residual_layers'] = 0
+        if 'decoder_residual_layers' not in config:
+            config['decoder_residual_layers'] = 0
         if 'no_hybrid_character_attention' not in config:
             config['no_hybrid_character_attention'] = False
+
+    if args.translate:
+        models = []
+        configs = []
+        for filename in args.load_model.split(','):
+            print('HNMT: loading translation model from %s...' % filename,
+                  file=sys.stderr, flush=True)
+            with open(filename, 'rb') as f:
+                configs.append(ensure_new_parameters(pickle.load(f)))
+                models.append(NMT('nmt', configs[-1]))
+                models[-1].load(f)
+        model = models[0]
+        config = configs[0]
 
         if args.output_score:
             config['output_score'] = args.output_score
@@ -1032,27 +1036,7 @@ def main():
         if args.load_model:
             with open(args.load_model, 'rb') as f:
                 config = pickle.load(f)
-                # allow loading old models without these parameters
-                if 'alignment_decay' not in config:
-                    config['alignment_decay'] = 0.9995
-                if 'alpha' not in config:
-                    config['alpha'] = 0.2
-                if 'beta' not in config:
-                    config['beta'] = 0.2
-                if 'gamma' not in config:
-                    config['gamma'] = 0.0
-                if 'len_smooth' not in config:
-                    config['len_smooth'] = 5.0
-                if 'hybrid_expand_n' not in config:
-                    config['hybrid_expand_n'] = None
-                if 'hybrid_char_cost_weight' not in config:
-                    config['hybrid_char_cost_weight'] = 1.0
-                if 'hybrid_max_extra_unks' not in config:
-                    config['hybrid_max_extra_unks'] = 2
-                if 'beam_prune_multiplier' not in config:
-                    config['beam_prune_multiplier'] = 1.0
-                if 'char_beam_prune_multiplier' not in config:
-                    config['char_beam_prune_multiplier'] = 1.2
+                config = ensure_new_parameters(config)
                 model = NMT('nmt', config)
                 model.load(f)
                 models = [model]
