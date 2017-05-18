@@ -1008,7 +1008,7 @@ def main():
         model = models[0]
         config = configs[0]
 
-        if args.output_score:
+        if 'output_score' in args_vars:
             config['output_score'] = args.output_score
         else:
             config['output_score'] = False
