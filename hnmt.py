@@ -970,32 +970,29 @@ def main():
 
     def ensure_new_parameters(config):
         """allow loading old models without these parameters"""
-        if 'alignment_decay' not in config:
-            config['alignment_decay'] = 0.9995
-        if 'alpha' not in config:
-            config['alpha'] = 0.01
-        if 'beta' not in config:
-            config['beta'] = 0.3
-        if 'gamma' not in config:
-            config['gamma'] = 0.0
-        if 'len_smooth' not in config:
-            config['len_smooth'] = 5.0
-        if 'hybrid_expand_n' not in config:
-            config['hybrid_expand_n'] = None
-        if 'hybrid_char_cost_weight' not in config:
-            config['hybrid_char_cost_weight'] = 1.0
-        if 'hybrid_max_extra_unks' not in config:
-            config['hybrid_max_extra_unks'] = 2
-        if 'beam_prune_multiplier' not in config:
-            config['beam_prune_multiplier'] = 1.0
-        if 'char_beam_prune_multiplier' not in config:
-            config['char_beam_prune_multiplier'] = 1.4
-        if 'encoder_residual_layers' not in config:
-            config['encoder_residual_layers'] = 0
-        if 'decoder_residual_layers' not in config:
-            config['decoder_residual_layers'] = 0
-        if 'no_hybrid_character_attention' not in config:
-            config['no_hybrid_character_attention'] = False
+        new_params = {
+            'alignment_decay': 0.9995,
+            'alpha': 0.01,
+            'beta': 0.3,
+            'gamma': 0.0,
+            'len_smooth': 5.0,
+            'hybrid_expand_n': None,
+            'hybrid_char_cost_weight': 1.0,
+            'hybrid_max_extra_unks': 2,
+            'beam_prune_multiplier': 1.0,
+            'char_beam_prune_multiplier': 1.4,
+            'encoder_residual_layers': 0,
+            'decoder_residual_layers': 0,
+            'no_hybrid_character_attention': False,
+            'aux_cost_weight': 0.5,
+            'aux_logf_weight': 1.0,
+            'aux_lemma_weight': 1.0,
+            'aux_pos_weight': 1.0,
+            'aux_tags_weight': 1.0,
+            }
+        for (key, val) in new_params.items():
+            if key not in config:
+                config[key] = val
         return config
 
     if args.translate:
