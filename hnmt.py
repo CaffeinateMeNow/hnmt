@@ -996,6 +996,7 @@ def main():
             config['decoder_residual_layers'] = 0
         if 'no_hybrid_character_attention' not in config:
             config['no_hybrid_character_attention'] = False
+        return config
 
     if args.translate:
         models = []
